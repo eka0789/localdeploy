@@ -531,7 +531,8 @@ def _list_files(root: Path) -> list[str]:
 
 def _make_reader(root: Path):
     def read(rel: str) -> str | None:
-        for candidate in (root / rel, *(p for p in root.rglob(rel) if p.is_file())[:1]):
+        matches = [p for p in root.rglob(rel) if p.is_file()][:1]
+        for candidate in (root / rel, *matches):
             try:
                 if candidate.exists() and candidate.stat().st_size < 512 * 1024:
                     return candidate.read_text(encoding="utf-8", errors="replace")

@@ -42,3 +42,6 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# Docker CLI binaries (downloaded locally, not part of the source)
+tools/

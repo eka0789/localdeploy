@@ -22,7 +22,11 @@ class GitError(RuntimeError):
 
 
 def _run(args: list[str], cwd: Path | None = None, env_extra: dict | None = None) -> str:
-    env = {"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "echo", "PATH": __import__("os").environ.get("PATH", "")}
+    # Pass the parent environment through (proxy, SSL certs, DNS settings) and
+    # only override what git needs to stay non-interactive.
+    import os
+
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "echo"}
     if env_extra:
         env.update(env_extra)
     try:
