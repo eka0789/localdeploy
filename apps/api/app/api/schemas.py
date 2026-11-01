@@ -177,6 +177,18 @@ class ApplicationOut(ORMModel):
     created_at: datetime
     domain_count: int = 0
     domains: list[str] = []
+    replicas: int = 1
+    autoscale_enabled: bool = False
+    autoscale_cpu_threshold: int = 70
+    autoscale_min: int = 1
+    autoscale_max: int = 3
+    is_preview: bool = False
+    preview_of: str | None = None
+    pr_number: int | None = None
+    enable_previews: bool = False
+    preview_base_domain: str | None = None
+    preview_retention_days: int = 7
+    server_id: str | None = None
 
 
 class ApplicationDetail(ApplicationOut):

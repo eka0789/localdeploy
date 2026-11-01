@@ -106,10 +106,21 @@ async def metrics_sampler() -> None:
 async def session_cleaner() -> None:
     from ..core.db import purge_expired_sessions
 
+    from ...services.previews import cleanup_expired_previews
+
+    counter = 0
     while True:
         try:
             await asyncio.to_thread(purge_expired_sessions, SessionLocal())
             await asyncio.to_thread(purge_old_logs, SessionLocal())
+            counter += 1
+            if counter % 6 == 0:  # ~every 6 hours
+                expired = await asyncio.to_thread(cleanup_expired_previews, SessionLocal())
+                if expired:
+                    await log_hub.publish("system", {
+                        "type": "preview", "level": "info",
+                        "message": f"Cleaned up {expired} expired preview deployment(s)",
+                    })
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -233,6 +244,78 @@ async def backup_scheduler() -> None:
         except Exception:
             pass
         await asyncio.sleep(60)
+
+
+# ---------------------------------------------------------------------------
+# autoscaler
+# ---------------------------------------------------------------------------
+
+_autoscale_state: dict[str, dict] = {}  # app_id -> {high_streak, low_streak, last_action_ts}
+
+
+async def autoscaler() -> None:
+    """Sample application CPU and scale replicas with hysteresis (every 15s)."""
+    import time
+
+    from .scaling import decide_autoscale, scale_application
+
+    while True:
+        try:
+            await asyncio.to_thread(_autoscale_tick)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+        await asyncio.sleep(15)
+
+
+def _autoscale_tick() -> None:
+    from datetime import timedelta
+
+    from sqlalchemy import func
+
+    from ..models.application import Application
+    from ..models.monitoring import ApplicationMetric
+    from .scaling import decide_autoscale, scale_application
+
+    session = SessionLocal()
+    try:
+        apps = session.query(Application).filter_by(autoscale_enabled=True, status="running").all()
+        cutoff = utcnow() - timedelta(seconds=90)
+        for app in apps:
+            rows = (
+                session.query(func.avg(ApplicationMetric.cpu_percent))
+                .filter(ApplicationMetric.application_id == app.id,
+                        ApplicationMetric.sampled_at >= cutoff)
+                .scalar()
+            )
+            if rows is None:
+                continue
+            avg_cpu = float(rows)
+            state = _autoscale_state.setdefault(str(app.id), {"high": 0, "low": 0})
+            target, high, low, action = decide_autoscale(
+                current=app.replicas or 1,
+                avg_cpu=avg_cpu,
+                threshold=app.autoscale_cpu_threshold,
+                minimum=app.autoscale_min,
+                maximum=app.autoscale_max,
+                high_streak=state["high"],
+                low_streak=state["low"],
+            )
+            state["high"], state["low"] = high, low
+            if action != "hold":
+                try:
+                    scale_application(session, app, target)
+                    log_hub.publish_sync("system", {
+                        "type": "application", "level": "info",
+                        "message": (f"Autoscaler: '{app.name}' {action} to {target} replica(s) "
+                                    f"(avg CPU {avg_cpu:.0f}%)"),
+                        "application_id": str(app.id),
+                    })
+                except Exception:
+                    pass
+    finally:
+        session.close()
 
 
 def utcnow_ts() -> datetime:

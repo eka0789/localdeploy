@@ -142,6 +142,75 @@ def _notify_result(session, deployment) -> None:
         pass
 
 
+def _dispatch_remote(session, deployment, app, logger) -> None:
+    """Send the deployment job to the remote agent; it reports logs/result back."""
+    from ..models.infrastructure import Server, ServerCommand
+    from .db_connections import build_env_for_app
+
+    server = session.query(Server).get(app.server_id)
+    if server is None:
+        raise DeploymentFailed("Target server no longer exists — reassign the application")
+
+    env_map = {
+        v.key: decrypt_secret(v.value_encrypted)
+        for v in session.query(EnvironmentVariable).filter_by(application_id=app.id).all()
+    }
+    env_map.update(build_env_for_app(session, app.id))
+
+    from ..models.application import ApplicationDomain
+    from .traefik import traefik_labels
+
+    domains = session.query(ApplicationDomain).filter_by(application_id=app.id).all()
+
+    payload = {
+        "slug": app.slug,
+        "deployment_id": str(deployment.id),
+        "source_type": app.source_type,
+        "git_url": app.git_url,
+        "git_branch": deployment.git_branch or app.git_branch,
+        "git_commit_sha": deployment.git_commit_sha,
+        "git_username": app.git_username,
+        "git_password": decrypt_secret(app.git_password_encrypted) if app.git_password_encrypted else None,
+        "dockerfile_path": app.dockerfile_path,
+        "docker_compose_path": app.docker_compose_path,
+        "docker_image": app.docker_image,
+        "install_command": app.install_command,
+        "build_command": app.build_command,
+        "start_command": app.start_command,
+        "container_port": app.container_port,
+        "health_check_path": app.health_check_path or "/",
+        "env": env_map,
+        "cpu_limit": app.cpu_limit,
+        "memory_limit_mb": app.memory_limit_mb,
+        "replicas": app.replicas or 1,
+        "network": settings.deploy_network,
+        "labels_extra": {"io.localdeploy.application": str(app.id)},
+        "traefik_labels": traefik_labels(
+            app.slug, [(d.hostname, d.target_port, d.ssl_enabled) for d in domains], app.container_port),
+        "rollback_image": (deployment.meta or {}).get("image_tag"),
+    }
+    command = ServerCommand(
+        server_id=server.id, deployment_id=deployment.id,
+        command_type="deploy", payload=payload,
+    )
+    session.add(command)
+    session.commit()
+    logger.log(f"→ Dispatched to remote server '{server.name}' (agent picks it up within seconds)")
+    logger.log("  Build logs will stream here from the agent.")
+
+
+def dispatch_remote_container_action(session, app: Application, action: str) -> None:
+    """Queue a start/stop/restart command for an app hosted on a remote server."""
+    from ..models.infrastructure import ServerCommand
+
+    command = ServerCommand(
+        server_id=app.server_id, command_type="container_action",
+        payload={"slug": app.slug, "action": action},
+    )
+    session.add(command)
+    session.commit()
+
+
 def _execute(session, deployment_id: uuid_mod.UUID) -> None:
     deployment = session.query(Deployment).get(deployment_id)
     if deployment is None:
@@ -159,6 +228,11 @@ def _execute(session, deployment_id: uuid_mod.UUID) -> None:
 
     logger.log(f"▲ LocalDeploy: starting deployment for '{app.name}' (trigger: {deployment.trigger})")
     _check_cancelled(session, deployment.id)
+
+    # -------------------------------------------------------- remote dispatch
+    if app.server_id:
+        _dispatch_remote(session, deployment, app, logger)
+        return
 
     # -------------------------------------------------------------- rollback
     rollback_to = (deployment.meta or {}).get("rollback_to")
@@ -432,6 +506,16 @@ def _deploy_single_container(session, app, deployment, image_tag, container_port
     app.project_type = app.project_type or deployment.project_type
     app.last_deployed_at = utcnow()
     session.commit()
+
+    # scale out to the configured replica count (Traefik load-balances them)
+    if (app.replicas or 1) > 1 and app.source_type != "compose":
+        try:
+            from .scaling import scale_application
+
+            report = scale_application(session, app, max(1, app.replicas or 1))
+            logger.log(f"→ Scaled to {report['desired']} replica(s) (+{report['created']} created)")
+        except Exception as exc:
+            logger.log(f"⚠ Replica scaling failed (primary is healthy): {exc}")
 
 
 def _health_check(container, container_port, host_port, path, logger, deployment) -> bool:

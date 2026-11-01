@@ -48,6 +48,18 @@ def _app_out(app: Application, db: Session, detail: bool = False) -> dict:
         "last_deployed_at": app.last_deployed_at, "created_at": app.created_at,
         "domain_count": len(domains),
         "domains": [d.hostname for d in domains],
+        "replicas": app.replicas or 1,
+        "autoscale_enabled": app.autoscale_enabled,
+        "autoscale_cpu_threshold": app.autoscale_cpu_threshold,
+        "autoscale_min": app.autoscale_min,
+        "autoscale_max": app.autoscale_max,
+        "is_preview": app.is_preview,
+        "preview_of": str(app.preview_of) if app.preview_of else None,
+        "pr_number": app.pr_number,
+        "enable_previews": app.enable_previews,
+        "preview_base_domain": app.preview_base_domain,
+        "preview_retention_days": app.preview_retention_days,
+        "server_id": str(app.server_id) if app.server_id else None,
     }
     if detail:
         data.update({
@@ -72,11 +84,13 @@ def _get_app(db: Session, app_id: uuid.UUID) -> Application:
 
 
 @router.get("", response_model=list[ApplicationOut])
-def list_applications(project_id: str | None = None,
+def list_applications(project_id: str | None = None, preview_of: str | None = None,
                       user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     query = db.query(Application).filter(Application.deleted_at.is_(None))
     if project_id:
         query = query.filter(Application.project_id == uuid.UUID(project_id))
+    if preview_of:
+        query = query.filter(Application.preview_of == uuid.UUID(preview_of))
     apps = query.order_by(Application.created_at.desc()).all()
     return [_app_out(a, db) for a in apps]
 
@@ -148,6 +162,9 @@ def update_application(app_id: uuid.UUID, payload: dict, request: Request,
         "git_username", "dockerfile_path", "docker_compose_path", "docker_image",
         "install_command", "build_command", "start_command", "container_port",
         "health_check_path", "auto_deploy", "cpu_limit", "memory_limit_mb", "project_id",
+        "replicas", "autoscale_enabled", "autoscale_cpu_threshold", "autoscale_min",
+        "autoscale_max", "enable_previews", "preview_base_domain",
+        "preview_retention_days", "server_id",
     }
     for key, value in payload.items():
         if key not in allowed:
@@ -156,6 +173,8 @@ def update_application(app_id: uuid.UUID, payload: dict, request: Request,
             app.git_password_encrypted = encrypt_secret(value) if value else None
         elif key == "project_id":
             app.project_id = uuid.UUID(value) if value else None
+        elif key == "server_id":
+            app.server_id = uuid.UUID(value) if value else None
         else:
             setattr(app, key, value)
     if payload.get("git_password") is None and "git_password" in payload:
@@ -231,6 +250,13 @@ async def upload_source(app_id: uuid.UUID, file: UploadFile,
 
 def _container_action(app_id: uuid.UUID, action: str, request: Request, user: User, db: Session):
     app = _get_app(db, app_id)
+    if app.server_id:
+        from ...services.deployer import dispatch_remote_container_action
+
+        dispatch_remote_container_action(db, app, action)
+        record_audit(db, user, f"applications.{action}", "application", str(app.id),
+                     {"remote": True}, request)
+        return {"ok": True, "status": app.status, "dispatched": "remote"}
     container = docker_service.get_container(app.container_name or f"ld-{app.slug}")
     if container is None:
         raise HTTPException(status.HTTP_409_CONFLICT,
@@ -268,6 +294,28 @@ def stop_app(app_id: uuid.UUID, request: Request,
 def restart_app(app_id: uuid.UUID, request: Request,
                 user: User = Depends(require_permission("applications.deploy")), db: Session = Depends(get_db)):
     return _container_action(app_id, "restart", request, user, db)
+
+
+@router.post("/{app_id}/scale", dependencies=[Depends(verify_csrf)])
+def scale_app(app_id: uuid.UUID, payload: dict, request: Request,
+              user: User = Depends(require_permission("applications.deploy")),
+              db: Session = Depends(get_db)):
+    """Reconcile replica count (Traefik load-balances across containers)."""
+    from ...services.scaling import scale_application
+
+    app = _get_app(db, app_id)
+    if app.source_type == "compose":
+        raise HTTPException(status.HTTP_409_CONFLICT, "Scaling applies to single-container apps")
+    desired = int(payload.get("replicas", 1))
+    try:
+        report = scale_application(db, app, desired)
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
+    except DockerUnavailableError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
+    record_audit(db, user, "applications.scale", "application", str(app.id),
+                 {"replicas": desired}, request)
+    return {"ok": True, **report}
 
 
 @router.get("/{app_id}/status")

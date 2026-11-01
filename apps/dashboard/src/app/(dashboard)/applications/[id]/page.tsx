@@ -21,9 +21,9 @@ import {
 import { api } from "@/lib/api";
 import { fmtDate, fmtDuration, relTime } from "@/lib/format";
 import { useLogStream } from "@/lib/use-log-stream";
-import type { Application, ApplicationDetail, Deployment, Domain, EnvVar } from "@/lib/types";
+import type { Application, ApplicationDetail, Deployment, Domain, EnvVar, RemoteServer } from "@/lib/types";
 
-type Tab = "overview" | "deployments" | "domains" | "databases" | "terminal" | "env" | "logs" | "settings";
+type Tab = "overview" | "deployments" | "domains" | "databases" | "terminal" | "env" | "logs" | "previews" | "settings";
 
 export default function ApplicationDetailPage() {
   const params = useParams<{ id: string }>();
@@ -80,6 +80,7 @@ export default function ApplicationDetailPage() {
     { id: "env", label: "Environment", icon: KeyRound },
     { id: "terminal", label: "Terminal", icon: Terminal },
     { id: "logs", label: "Logs", icon: Terminal },
+    { id: "previews", label: "Previews", icon: Globe },
     { id: "settings", label: "Settings", icon: Settings2 },
   ];
 
@@ -133,7 +134,8 @@ export default function ApplicationDetailPage() {
         {tab === "env" && <EnvTab appId={appId} />}
         {tab === "terminal" && <ContainerTerminal appId={appId} />}
         {tab === "logs" && <LogsTab app={app} />}
-        {tab === "settings" && <SettingsTab app={app} onChanged={invalidate} onDelete={() => remove.mutate()} />}
+        {tab === "previews" && <PreviewsTab app={app} />}
+        {tab === "settings" && <SettingsTab app={app} appId={appId} onChanged={invalidate} onDelete={() => remove.mutate()} />}
       </div>
     </>
   );
@@ -609,7 +611,7 @@ function LogsTab({ app }: { app: Application }) {
   );
 }
 
-function SettingsTab({ app, onChanged, onDelete }: { app: ApplicationDetail; onChanged: () => void; onDelete: () => void }) {
+function SettingsTab({ app, appId, onChanged, onDelete }: { app: ApplicationDetail; appId: string; onChanged: () => void; onDelete: () => void }) {
   const queryClient = useQueryClient();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [form, setForm] = useState({
@@ -621,6 +623,16 @@ function SettingsTab({ app, onChanged, onDelete }: { app: ApplicationDetail; onC
     cpu_limit: app.cpu_limit ? String(app.cpu_limit) : "",
     memory_limit_mb: app.memory_limit_mb ? String(app.memory_limit_mb) : "",
     auto_deploy: app.auto_deploy,
+    replicas: String(app.replicas ?? 1),
+    autoscale_enabled: app.autoscale_enabled,
+    autoscale_cpu_threshold: String(app.autoscale_cpu_threshold ?? 70),
+    autoscale_min: String(app.autoscale_min ?? 1),
+    autoscale_max: String(app.autoscale_max ?? 3),
+    server_id: app.server_id ?? "",
+  });
+  const { data: servers } = useQuery<RemoteServer[]>({
+    queryKey: ["servers"],
+    queryFn: () => api("/api/servers"),
   });
 
   const save = useMutation({
@@ -635,6 +647,12 @@ function SettingsTab({ app, onChanged, onDelete }: { app: ApplicationDetail; onC
         cpu_limit: form.cpu_limit ? Number(form.cpu_limit) : null,
         memory_limit_mb: form.memory_limit_mb ? Number(form.memory_limit_mb) : null,
         auto_deploy: form.auto_deploy,
+        replicas: Number(form.replicas) || 1,
+        autoscale_enabled: form.autoscale_enabled,
+        autoscale_cpu_threshold: Number(form.autoscale_cpu_threshold) || 70,
+        autoscale_min: Number(form.autoscale_min) || 1,
+        autoscale_max: Number(form.autoscale_max) || 3,
+        server_id: form.server_id || null,
       },
     }),
     onSuccess: () => {
@@ -691,6 +709,45 @@ function SettingsTab({ app, onChanged, onDelete }: { app: ApplicationDetail; onC
             <Switch checked={form.auto_deploy} onChange={(v) => setForm({ ...form, auto_deploy: v })} />
             <Label>Auto-deploy on webhook push</Label>
           </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>Replicas (Traefik load-balances)</Label>
+              <Input type="number" min={1} max={10} value={form.replicas}
+                     onChange={(e) => setForm({ ...form, replicas: e.target.value })} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Run on server</Label>
+              <Select value={form.server_id} onChange={(e) => setForm({ ...form, server_id: e.target.value })}>
+                <option value="">This machine (local)</option>
+                {servers?.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.status})</option>)}
+              </Select>
+            </div>
+          </div>
+          <div className="rounded-lg border border-border p-3">
+            <div className="mb-2 flex items-center gap-2">
+              <Switch checked={form.autoscale_enabled} onChange={(v) => setForm({ ...form, autoscale_enabled: v })} />
+              <Label>Autoscale on CPU</Label>
+            </div>
+            {form.autoscale_enabled && (
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div className="space-y-1.5">
+                  <Label>CPU threshold %</Label>
+                  <Input type="number" value={form.autoscale_cpu_threshold}
+                         onChange={(e) => setForm({ ...form, autoscale_cpu_threshold: e.target.value })} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Min replicas</Label>
+                  <Input type="number" value={form.autoscale_min}
+                         onChange={(e) => setForm({ ...form, autoscale_min: e.target.value })} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Max replicas</Label>
+                  <Input type="number" value={form.autoscale_max}
+                         onChange={(e) => setForm({ ...form, autoscale_max: e.target.value })} />
+                </div>
+              </div>
+            )}
+          </div>
           <Button onClick={() => save.mutate()} loading={save.isPending}>Save settings</Button>
         </CardContent>
       </Card>
@@ -741,6 +798,122 @@ function SettingsTab({ app, onChanged, onDelete }: { app: ApplicationDetail; onC
         onConfirm={onDelete}
         title={`Delete ${app.name}?`}
         message="This stops the container and removes the application record. This cannot be undone."
+      />
+    </div>
+  );
+}
+
+
+function PreviewsTab({ app }: { app: ApplicationDetail }) {
+  const queryClient = useQueryClient();
+  const [form, setForm] = useState({
+    enable_previews: app.enable_previews,
+    preview_base_domain: app.preview_base_domain ?? "",
+    preview_retention_days: String(app.preview_retention_days ?? 7),
+  });
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
+  const { data: previews, isLoading } = useQuery<Application[]>({
+    queryKey: ["previews", app.id],
+    queryFn: () => api(`/api/applications?preview_of=${app.id}`),
+    refetchInterval: 10_000,
+    enabled: !app.is_preview,
+  });
+
+  const save = useMutation({
+    mutationFn: () => api(`/api/applications/${app.id}`, {
+      method: "PUT",
+      body: {
+        enable_previews: form.enable_previews,
+        preview_base_domain: form.preview_base_domain || null,
+        preview_retention_days: Number(form.preview_retention_days) || 7,
+      },
+    }),
+    onSuccess: () => {
+      toast.success("Preview settings saved");
+      queryClient.invalidateQueries({ queryKey: ["application", app.id] });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const remove = useMutation({
+    mutationFn: (id: string) => api(`/api/applications/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      toast.success("Preview deleted");
+      queryClient.invalidateQueries({ queryKey: ["previews", app.id] });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  if (app.is_preview) {
+    return <p className="text-sm text-muted-foreground">This application IS a preview deployment.</p>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader><CardTitle>Preview deployments (per pull request)</CardTitle></CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center gap-2">
+            <Switch checked={form.enable_previews} onChange={(v) => setForm({ ...form, enable_previews: v })} />
+            <Label>Deploy a preview for every pull request (needs the Git webhook)</Label>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>Preview base domain</Label>
+              <Input value={form.preview_base_domain}
+                     onChange={(e) => setForm({ ...form, preview_base_domain: e.target.value })}
+                     placeholder="preview.namadomain.com" />
+              <p className="text-xs text-muted-foreground">
+                Each PR gets pr&lt;N&gt;.&lt;base&gt; — provisioned automatically when Cloudflare is connected.
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Auto-delete after (days)</Label>
+              <Input type="number" value={form.preview_retention_days}
+                     onChange={(e) => setForm({ ...form, preview_retention_days: e.target.value })} />
+            </div>
+          </div>
+          <Button onClick={() => save.mutate()} loading={save.isPending}>Save preview settings</Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle>Active previews</CardTitle></CardHeader>
+        <CardContent className="space-y-2">
+          {isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+          {!isLoading && !previews?.length && (
+            <p className="text-sm text-muted-foreground">
+              No preview deployments yet. Open a pull request on the watched repo and it appears here.
+            </p>
+          )}
+          {(previews ?? []).map((preview) => (
+            <div key={preview.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-3">
+              <div>
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  PR#{preview.pr_number} — {preview.slug}
+                  <StatusBadge status={preview.status} />
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {preview.git_branch} · {preview.domains.join(", ") || "no domain"}
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <Link href={`/applications/${preview.id}`} className="text-sm text-primary hover:underline">Open</Link>
+                <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(preview.id)}>
+                  <Trash2 className="h-4 w-4 text-destructive" />
+                </Button>
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      <ConfirmDialog
+        open={!!confirmDelete} onClose={() => setConfirmDelete(null)}
+        onConfirm={() => confirmDelete && remove.mutate(confirmDelete)}
+        title="Delete preview?"
+        message="Stops its container and removes the preview application."
       />
     </div>
   );

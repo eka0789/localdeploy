@@ -7,6 +7,7 @@ import { toast } from "sonner";
 
 import { Topbar } from "@/components/layout";
 import { NotificationsTab, TokensTab } from "@/components/settings-ops";
+import { ServersTab } from "@/components/servers-ops";
 import {
   Badge, Button, Card, CardContent, CardHeader, CardTitle, ConfirmDialog, Dialog, Input, Label,
   Select, Skeleton, Switch, TD, TBody, TH, THead, TR, Table,
@@ -15,7 +16,7 @@ import { api } from "@/lib/api";
 import { relTime } from "@/lib/format";
 import type { AuditLogEntry, Role, User } from "@/lib/types";
 
-type Tab = "profile" | "users" | "security" | "notifications" | "tokens";
+type Tab = "profile" | "users" | "security" | "notifications" | "tokens" | "servers";
 
 export default function SettingsPage() {
   const [tab, setTab] = useState<Tab>("profile");
@@ -25,6 +26,7 @@ export default function SettingsPage() {
     { id: "users", label: "Users & roles" },
     { id: "notifications", label: "Notifications" },
     { id: "tokens", label: "API tokens" },
+    { id: "servers", label: "Servers" },
     { id: "security", label: "Audit & security" },
   ];
 
@@ -49,6 +51,7 @@ export default function SettingsPage() {
         {tab === "users" && <UsersTab />}
         {tab === "notifications" && <NotificationsTab />}
         {tab === "tokens" && <TokensTab />}
+        {tab === "servers" && <ServersTab />}
         {tab === "security" && <SecurityTab />}
       </div>
     </>

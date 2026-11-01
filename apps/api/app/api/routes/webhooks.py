@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 from ...core.db import get_db, utcnow
 from ...core.security import decrypt_secret, verify_hmac_signature
 from ...models.application import Application, WebhookIntegration
+from ...models.deployment import Deployment
 from ...services.worker import create_deployment, enqueue_deployment
 from ..deps import get_client_ip, login_limiter, record_audit
 
@@ -53,6 +55,25 @@ async def receive_webhook(token: str, request: Request, db: Session = Depends(ge
         event = json.loads(payload or b"{}")
     except json.JSONDecodeError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid JSON payload")
+
+    # ---- preview deployments per pull request / merge request ----
+    gh_event = request.headers.get("x-github-event", "")
+    gl_event = request.headers.get("x-gitlab-event", "")
+    if gh_event == "pull_request" or gl_event == "Merge Request Hook":
+        from ...services import previews
+
+        provider = "github" if gh_event else "gitlab"
+        if app.enable_previews:
+            outcome = previews.handle_pull_request(db, app, provider, event)
+            if outcome.get("handled"):
+                if outcome.get("action") == "deployed" and outcome.get("deployment_id"):
+                    deployment = db.query(Deployment).get(uuid.UUID(outcome["deployment_id"]))
+                    if deployment:
+                        await enqueue_deployment(deployment)
+                record_audit(db, None, "webhooks.preview", "application", str(app.id),
+                             {"outcome": outcome.get("action")}, request)
+                return {"ok": True, "preview": outcome}
+        return {"ok": True, "message": "Preview deployments disabled for this app"}
 
     # --- extract push info across providers --------------------------------
     ref = event.get("ref") or ""

@@ -41,6 +41,18 @@ export interface Application {
   created_at: string;
   domain_count: number;
   domains: string[];
+  replicas: number;
+  autoscale_enabled: boolean;
+  autoscale_cpu_threshold: number;
+  autoscale_min: number;
+  autoscale_max: number;
+  is_preview: boolean;
+  preview_of: string | null;
+  pr_number: number | null;
+  enable_previews: boolean;
+  preview_base_domain: string | null;
+  preview_retention_days: number;
+  server_id: string | null;
 }
 
 export interface ApplicationDetail extends Application {
@@ -362,5 +374,23 @@ export interface BackupSchedule {
   last_run_at: string | null;
   last_status: string | null;
   last_error: string | null;
+  created_at: string;
+}
+
+/* ---------------- Servers (multi-server) ---------------- */
+
+export interface RemoteServer {
+  id: string;
+  name: string;
+  status: "online" | "offline" | "pending";
+  agent_version: string | null;
+  last_seen_at: string | null;
+  cpu_percent: number;
+  memory_used_mb: number;
+  memory_total_mb: number;
+  container_count: number;
+  running_count: number;
+  labels: Record<string, unknown>;
+  token_prefix: string;
   created_at: string;
 }

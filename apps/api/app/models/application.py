@@ -66,6 +66,24 @@ class Application(Base, UUIDPk, TimestampMixin, SoftDeleteMixin):
     cpu_limit: Mapped[float | None] = mapped_column(Float)  # vCPUs
     memory_limit_mb: Mapped[int | None] = mapped_column(Integer)
 
+    # Replicas / autoscaling (Traefik load-balances across replica containers)
+    replicas: Mapped[int] = mapped_column(Integer, default=1)
+    autoscale_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    autoscale_cpu_threshold: Mapped[int] = mapped_column(Integer, default=70)  # percent
+    autoscale_min: Mapped[int] = mapped_column(Integer, default=1)
+    autoscale_max: Mapped[int] = mapped_column(Integer, default=3)
+
+    # Preview deployments (per pull request)
+    is_preview: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    preview_of: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("applications.id"), nullable=True)
+    pr_number: Mapped[int | None] = mapped_column(Integer)
+    enable_previews: Mapped[bool] = mapped_column(Boolean, default=False)
+    preview_base_domain: Mapped[str | None] = mapped_column(String(255))
+    preview_retention_days: Mapped[int] = mapped_column(Integer, default=7)
+
+    # Remote execution (multi-server): null = run on this host
+    server_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
+
     # Extra docker-compose env passthrough (JSON map) for compose sources
     extra_config: Mapped[dict] = mapped_column(JSON, default=dict)
 

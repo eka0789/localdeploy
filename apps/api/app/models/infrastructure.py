@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..core.db import Base, utcnow
@@ -149,3 +149,43 @@ class BackupSchedule(Base, UUIDPk, TimestampMixin):
     last_status: Mapped[str | None] = mapped_column(String(20))
     last_error: Mapped[str | None] = mapped_column(Text)
     created_by_name: Mapped[str | None] = mapped_column(String(64))
+
+
+class Server(Base, UUIDPk, TimestampMixin):
+    """A remote Docker host running the LocalDeploy agent.
+
+    The agent dials OUT to this API (no inbound ports on the remote host),
+    authenticates with its server token, reports heartbeat stats and executes
+    queued commands (deployments, container actions).
+    """
+
+    __tablename__ = "servers"
+
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    token_prefix: Mapped[str] = mapped_column(String(12))
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending|online|offline
+    agent_version: Mapped[str | None] = mapped_column(String(40))
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cpu_percent: Mapped[float] = mapped_column(Float, default=0)
+    memory_used_mb: Mapped[float] = mapped_column(Float, default=0)
+    memory_total_mb: Mapped[float] = mapped_column(Float, default=0)
+    container_count: Mapped[int] = mapped_column(Integer, default=0)
+    running_count: Mapped[int] = mapped_column(Integer, default=0)
+    labels: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class ServerCommand(Base, UUIDPk):
+    """A command queued for an agent (deploy / container action)."""
+
+    __tablename__ = "server_commands"
+
+    server_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("servers.id", ondelete="CASCADE"), index=True)
+    deployment_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, index=True)
+    command_type: Mapped[str] = mapped_column(String(40))  # deploy|container_action|list_containers
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)  # queued|sent|done|failed
+    result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
