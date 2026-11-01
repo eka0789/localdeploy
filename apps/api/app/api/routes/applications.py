@@ -531,7 +531,7 @@ async def app_terminal(websocket: WebSocket, app_id: uuid.UUID, db: Session = De
     def pump_output():
         try:
             while not stop_event.is_set():
-                data = sock.recv(4096)
+                data = sock.read(4096)  # exec_start(socket=True) returns a SocketIO
                 if not data:
                     break
                 text = data.decode(errors="replace")
@@ -543,7 +543,6 @@ async def app_terminal(websocket: WebSocket, app_id: uuid.UUID, db: Session = De
             stop_event.set()
 
     threading.Thread(target=pump_output, daemon=True).start()
-    _ = base64  # tty=True gives a raw stream; kept for reference
 
     try:
         while not stop_event.is_set():
@@ -557,13 +556,14 @@ async def app_terminal(websocket: WebSocket, app_id: uuid.UUID, db: Session = De
             else:
                 data = message.get("data", "")
                 if data:
-                    sock.sendall(data.encode())
+                    sock._sock.sendall(data.encode())  # raw socket beneath the SocketIO
     except WebSocketDisconnect:
         pass
     finally:
         stop_event.set()
         try:
             sock.close()
+            sock._sock.close()
         except Exception:
             pass
-        loop.close()
+        _ = loop  # reference kept: sends are marshalled onto the running loop

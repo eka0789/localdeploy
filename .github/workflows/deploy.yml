@@ -1,0 +1,38 @@
+name: Deploy via LocalDeploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      redeploy_latest:
+        description: "Redeploy the app (builds latest commit from its configured Git source)"
+        type: boolean
+        default: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger LocalDeploy deployment
+        env:
+          TOKEN: ${{ secrets.LOCALDEPLOY_TOKEN }}
+          APP_ID: ${{ secrets.LOCALDEPLOY_APP_ID }}
+          URL: ${{ secrets.LOCALDEPLOY_URL }}
+        run: |
+          if [ -z "$TOKEN" ] || [ -z "$APP_ID" ] || [ -z "$URL" ]; then
+            echo "::error::Set LOCALDEPLOY_TOKEN, LOCALDEPLOY_APP_ID and LOCALDEPLOY_URL repository secrets first."
+            exit 1
+          fi
+          response=$(curl -sf -X POST "$URL/api/applications/$APP_ID/deploy" \
+               -H "Authorization: Bearer $TOKEN")
+          deployment_id=$(echo "$response" | grep -o '"deployment_id":"[^"]*"' | cut -d'"' -f4)
+          echo "Deployment queued: $deployment_id"
+
+      - name: Wait and report status
+        env:
+          TOKEN: ${{ secrets.LOCALDEPLOY_TOKEN }}
+          APP_ID: ${{ secrets.LOCALDEPLOY_APP_ID }}
+          URL: ${{ secrets.LOCALDEPLOY_URL }}
+        run: |
+          sleep 20
+          curl -sf "$URL/api/deployments?application_id=$APP_ID&limit=1" \
+               -H "Authorization: Bearer $TOKEN" | head -c 600

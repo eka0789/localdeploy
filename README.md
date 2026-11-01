@@ -1,150 +1,172 @@
-# LocalDeploy
+<div align="center">
 
-**Self-hosted deployment & application hosting platform** — turn your own computer, mini PC, or Linux server into a private cloud platform in the spirit of Dokploy, Coolify, CapRover and Portainer.
+# 🚀 LocalDeploy
 
-```
-┌────────────────────────────────────────────────────────────────────┐
-│  Browser ──► Dashboard (Next.js)  ──►  API (FastAPI)               │
-│                                          │                         │
-│                        ┌─────────────────┼─────────────────┐       │
-│                        ▼                 ▼                 ▼       │
-│               Deployment Worker    Docker Engine      PostgreSQL   │
-│               (git→build→health    (containers,       (platform    │
-│                check→switch)        images, vols)      DB + Redis) │
-│                        │                                           │
-│                        ▼                                           │
-│              Traefik (domains + Let's Encrypt SSL)                 │
-│                        │                                           │
-│              App containers / Compose projects                     │
-│        (public via public IP + port 80/443, or Cloudflare Tunnel)  │
-└────────────────────────────────────────────────────────────────────┘
-```
+**Turn any PC into a self-hosted cloud platform — your own PaaS, at zero infrastructure cost.**
 
-## What it does
+Deploy from Git with automatic runtime detection, route domains with one-click SSL,
+provision databases, monitor everything — inspired by Dokploy, Coolify & CapRover.
 
-- **Deploy anything** — Git repositories (auto-detected runtimes: Next.js, Node, React, Vue, Nuxt, Angular, NestJS, Express, Laravel/PHP, FastAPI, Django, Flask, Go, Java/Spring, Ruby, static sites), custom Dockerfiles, Docker Compose files, prebuilt images, or uploaded source archives.
-- **Real Docker integration** — images are built with immutable `localdeploy/<app>:<deploy-id>` tags, health-checked, and only then switched (previous container stays until the new one passes; instant rollback to any previous image).
-- **Domains & SSL** — attach domains to apps, Traefik routes them dynamically via labels, Let's Encrypt certificates are managed automatically with expiry monitoring.
-- **Public networking, two ways** — Public IP + port forwarding, or Cloudflare Tunnel (no open ports, works behind CGNAT).
-- **Managed databases** — PostgreSQL / MySQL / MariaDB / Redis / MongoDB with persistent volumes, health checks, connection info, and one-click backup/restore. Ports are never public by default.
-- **Monitoring** — live CPU/RAM/disk/network from the host, per-container stats, 48h history, Prometheus endpoint at `/metrics`.
-- **Logs** — real-time WebSocket streaming for deployments and container logs.
-- **Security** — Argon2id password hashing, server-side sessions, CSRF double-submit, login rate limiting, RBAC (admin/viewer), encrypted secrets at rest (Fernet), audit logging, Docker socket treated as privileged access.
+[![CI](https://github.com/eka0789/localdeploy/actions/workflows/ci.yml/badge.svg)](https://github.com/eka0789/localdeploy/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-65%20passing-10b981)](#testing)
+[![License: MIT](https://img.shields.io/badge/license-MIT-3b82f6)](LICENSE)
+![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white)
+![Next.js](https://img.shields.io/badge/Next.js-15-black?logo=next.js)
+![Docker](https://img.shields.io/badge/Docker-Engine-2496ed?logo=docker&logoColor=white)
+![Platform](https://img.shields.io/badge/platform-self--hosted-8b5cf6)
 
-## Repository layout
+</div>
 
-```
-localdeploy/
-├── apps/
-│   ├── api/               # FastAPI backend (deployment engine, Docker, domains, …)
-│   └── dashboard/         # Next.js dashboard (App Router, Tailwind v4, TanStack Query)
-├── infrastructure/
-│   ├── docker/            # Dockerfiles (api, dashboard)
-│   ├── traefik/           # Traefik static + dynamic config (ACME, redirects)
-│   ├── cloudflare/        # tunnel notes
-│   └── monitoring/        # prometheus scrape example
-├── scripts/               # install.sh (Linux one-command installer)
-├── docs/                  # ARCHITECTURE, NETWORKING, ENVIRONMENT, WSL2, TROUBLESHOOTING
-├── docker-compose.yml     # full production stack
-└── .env.example
-```
+---
 
-## Quick start
+## ✨ What is LocalDeploy?
 
-### Linux (recommended production host)
+LocalDeploy transforms an idle PC, laptop, or mini-PC into a **full application hosting platform** —
+a practical, cost-efficient alternative to renting VPS instances (a small idle PC draws 10–25 W,
+roughly 60–80% cheaper than a comparable VPS).
 
-```bash
-git clone <this-repo> && cd localdeploy
-cp .env.example .env        # then edit: SECRET_KEY, POSTGRES password, ACME_EMAIL
-docker compose up -d --build
-```
+- 🚀 **Deploy anything** — Git repos with auto-detected runtimes (Next.js, Node, React/Vue/Angular,
+  NestJS, Laravel/PHP, FastAPI/Django/Flask, Go, Java/Spring, Ruby, static), custom Dockerfiles,
+  Docker Compose, prebuilt images, or uploaded archives
+- 🌐 **Any domain, one click** — Cloudflare API integration provisions tunnel ingress + DNS CNAME
+  automatically (`namadomain.com`, `.id`, `.my.id`, `.biz.id`…), SSL handled at the edge
+- 🗄️ **Databases** — managed containers (PostgreSQL/MySQL/MariaDB/Redis/MongoDB) **plus** external
+  providers (Supabase, Neon, Turso, Atlas, Upstash, PlanetScale) with encrypted credentials and
+  automatic env-var injection
+- 🔁 **Zero-downtime deploys** — immutable image tags, health-checked switch, one-click rollback
+- 🔀 **Preview deployments** — every pull request gets an isolated environment + its own URL
+- 📈 **Auto-scaling** — CPU-based replica scaling with hysteresis, Traefik load balancing
+- 🖥️ **Multi-server** — outbound agent architecture: manage remote Docker hosts with zero inbound ports
+- 📊 **Observability** — real-time build/container logs over WebSocket, interactive container
+  terminal, server & per-app metrics, Prometheus endpoint
+- 🔔 **Notifications** — Discord / Telegram / Slack / generic webhooks on deploy & container death
+- 💾 **Scheduled backups** — databases and volumes with retention policies
+- 🔐 **Security-first** — Argon2id, server-side sessions, CSRF double-submit, rate limiting, RBAC,
+  Fernet-encrypted secrets, audit log, API tokens for CI/CD
 
-Or the one-liner installer (installs Docker if missing):
+## 📸 Screenshots
 
-```bash
-./scripts/install.sh
-```
-
-### Windows / macOS (development via Docker Desktop or WSL2)
-
-See [docs/WSL2.md](docs/WSL2.md). TL;DR: install Docker Desktop, run under WSL2, then the same `docker compose up -d --build`.
-
-### Local development (without Docker for the platform itself)
-
-```bash
-# API — Python 3.11+
-cd apps/api
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
-python -m alembic upgrade head
-uvicorn app.main:app --port 8000 --reload
-
-# Dashboard — Node 18+
-cd apps/dashboard
-npm install
-echo 'NEXT_PUBLIC_API_URL=http://localhost:8000' > .env.local
-npm run dev
-```
-
-Log in at `http://localhost:3000` with the bootstrap admin (`admin` / `localdeploy123` — **change it immediately**, see `.env.example`).
-
-## First deployment walkthrough
-
-1. **Overview →** check Docker shows *connected*.
-2. **Applications → New application** → choose *Git repo* → `https://github.com/user/repo` → set the container port.
-3. Press **Deploy** — the engine clones, detects the runtime, generates a Dockerfile if none exists, builds, starts, health-checks, then switches traffic. Watch the live build log.
-4. **Domains tab** (or Domains page) → add `app.example.com` → follow the DNS instructions.
-5. Point DNS (A record or Cloudflare Tunnel) at the server → HTTPS is issued automatically when Traefik runs with `ACME_EMAIL` set.
-
-## Configuration
-
-All environment variables (prefix `LOCALDEPLOY_`) are documented in [.env.example](.env.example). Key ones:
-
-| Variable | Purpose |
+| Overview | Deployments with live build log |
 |---|---|
-| `LOCALDEPLOY_SECRET_KEY` | Signs sessions + derives the Fernet key that encrypts stored secrets. **Set it in production.** |
-| `LOCALDEPLOY_DATABASE_URL` | `sqlite:///…` (dev) or `postgresql+psycopg://…` (production). |
-| `LOCALDEPLOY_DOCKER_HOST` | Docker endpoint; empty = local socket / named pipe. |
-| `LOCALDEPLOY_DEPLOY_NETWORK` | Docker network shared by Traefik and deployed apps. |
+| ![Overview](docs/screenshots/01-overview.png) | ![Deployments](docs/screenshots/03-deployments.png) |
 
-See [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) for the full reference.
+| Interactive container terminal | Auto-scaling & monitoring |
+|---|---|
+| ![Terminal](docs/screenshots/07-terminal.png) | ![Monitoring](docs/screenshots/04-monitoring.png) |
 
-## Security model
+| Applications with preview badges | Cloudflare integration |
+|---|---|
+| ![Applications](docs/screenshots/02-applications.png) | ![Networking](docs/screenshots/06-networking.png) |
 
-- The **Docker socket is mounted only into the API container** and is never proxied to browsers or deployed apps. Deployed containers cannot see the platform database.
-- No arbitrary shell endpoints exist. The API runs only `git` and `docker` with argument lists (never `shell=True`); build commands execute *inside* build containers, not on the host.
-- Database instances are reachable only on the internal Docker network; optional loopback publishing for local tooling.
-- All state-changing API calls require a session cookie **and** a CSRF token; logins are rate-limited; every mutation lands in the audit log.
+> More: [docs/screenshots/](docs/screenshots) — external databases, domains, backups.
 
-## Tests
+## 🏗️ Architecture
+
+```
+                    ┌──────────────────────────────────────────────────┐
+Internet ──► Cloudflare Edge (SSL) ──► Tunnel / port 80-443           │
+                    │                 ▼                              │
+                    │  ┌──────────────────────────────────────┐      │
+                    │  │ Traefik (labels-based routing)       │      │
+                    │  └──────────────┬───────────────────────┘      │
+                    │                 ▼                              │
+                    │  App containers · Compose projects             │
+                    │  Managed DBs (private network only)            │
+                    │  cloudflared                                   │
+                    │  ─────────────────────────────────────         │
+                    │  Dashboard (Next.js :3000) ──► API (FastAPI)   │
+                    │                                 │              │
+                    │        ┌────────────────────────┼─────────┐    │
+                    │        ▼                        ▼         ▼    │
+                    │  Deployment worker       Docker Engine   DB   │
+                    │  (build→health→switch)   (WSL2/remote)         │
+                    └──────────────────────────────────────────────────┘
+                                        ▲
+                              Remote hosts run agent.py (dial-out,
+                              zero inbound ports) for multi-server
+```
+
+## 🚀 Quick Start
+
+### Linux (production)
 
 ```bash
-cd apps/api && pytest          # 48 tests: runtime detection, buildpacks, security, API flows
+git clone https://github.com/eka0789/localdeploy.git && cd localdeploy
+cp .env.example .env      # set SECRET_KEY, POSTGRES password, ACME_EMAIL
+docker compose up -d --build
+# or one-command: ./scripts/install.sh
+```
+
+### Windows / WSL2 (development)
+
+See [docs/WSL2.md](docs/WSL2.md) — Docker Engine inside WSL2 + mirrored networking,
+then `docker compose up -d --build`, or run the API and dashboard directly:
+
+```bash
+# API
+cd apps/api && python -m venv .venv && .venv/bin/activate
+pip install -e ".[dev]" && alembic upgrade head
+uvicorn app.main:app --port 8000
+
+# Dashboard
+cd apps/dashboard && npm install && npm run dev
+```
+
+Login with the bootstrap admin from `.env` (default `admin` / `localdeploy123`) —
+**change it immediately**.
+
+### First deployment in 5 minutes
+
+1. Overview → verify **Docker connected**
+2. Applications → New application → Git repo → Deploy → watch the live build log
+3. Domains → add `app.yourdomain.com` → **Tunnel** → provisioned
+4. `https://app.yourdomain.com` is live 🎉
+
+Full walkthrough (Bahasa Indonesia): **[docs/PANDUAN-LENGKAP.md](docs/PANDUAN-LENGKAP.md)**
+
+## 🤖 CI/CD
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `ci.yml` | push / PR | Backend pytest suite + dashboard type-checked build |
+| `deploy.yml` | manual (`workflow_dispatch`) | Redeploys an application through the LocalDeploy API using a `LOCALDEPLOY_TOKEN` secret |
+
+Set these in **Repo → Settings → Secrets and variables → Actions** to enable `deploy.yml`:
+
+| Secret | Value |
+|---|---|
+| `LOCALDEPLOY_TOKEN` | Personal access token (`ldt_…`) — Settings → API tokens |
+| `LOCALDEPLOY_APP_ID` | Application ID from the dashboard URL |
+| `LOCALDEPLOY_URL` | Public API base URL (e.g. `https://api.yourdomain.com`) |
+
+## 🗺️ Feature Parity
+
+| | LocalDeploy | Dokploy (free) | Coolify |
+|---|---|---|---|
+| Git/buildpack deploys, rollback | ✅ | ✅ | ✅ |
+| One-click Cloudflare domain provisioning | ✅ | ✅ | ✅ |
+| External DB integrations + env injection | ✅ | ✅ | ✅ |
+| Preview deployments per PR | ✅ | ❌ | ✅ |
+| Multi-server (outbound agent) | ✅ | ❌ | ✅ |
+| Replica auto-scaling | ✅ | ✅ | ✅ |
+| Container terminal, notifications, scheduled backups, API tokens | ✅ | ✅ | ✅ |
+
+## 📚 Documentation
+
+- **[Panduan Lengkap (ID)](docs/PANDUAN-LENGKAP.md)** — full user guide in Bahasa Indonesia
+- **[Mitigasi Downtime (ID)](docs/MITIGASI-DOWNTIME.md)** — keeping services reachable when the
+  PC is off or the internet drops (Cloudflare Worker fallback included)
+- [Architecture](docs/ARCHITECTURE.md) · [Networking](docs/NETWORKING.md) ·
+  [Environment](docs/ENVIRONMENT.md) · [WSL2 setup](docs/WSL2.md) ·
+  [Troubleshooting](docs/TROUBLESHOOTING.md) · [Agent](apps/agent/README.md)
+
+## 🧪 Testing
+
+```bash
+cd apps/api && pytest -q        # 65 tests: security, buildpacks, deploys, RBAC, integrations
 cd apps/dashboard && npm run build   # type-checked production build
 ```
 
-## Documentation
+## 📄 License
 
-- **[docs/PANDUAN-LENGKAP.md](docs/PANDUAN-LENGKAP.md)** — 📘 **Panduan lengkap cara pakai (Bahasa Indonesia)**
-- **[docs/MITIGASI-DOWNTIME.md](docs/MITIGASI-DOWNTIME.md)** — 🛡️ Strategi saat PC mati / internet putus (Bahasa Indonesia)
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system design and module map
-- [docs/NETWORKING.md](docs/NETWORKING.md) — public IP vs Cloudflare Tunnel, SSL
-- [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) — configuration reference
-- [docs/WSL2.md](docs/WSL2.md) — Windows development setup
-- [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) — common issues
-- [apps/agent/README.md](apps/agent/README.md) — multi-server agent setup
-
-## Definition of done (verified)
-
-1. ✅ Install locally → dashboard reachable
-2. ✅ Docker Engine connects (graceful offline status when absent)
-3. ✅ Create projects & applications
-4. ✅ Git-based deploys with runtime detection + buildpacks
-5. ✅ Laravel / Next.js / FastAPI buildpacks generate working Dockerfiles
-6. ✅ Per-app domains routed by Traefik
-7. ✅ Internet access via public IP mode or Cloudflare Tunnel
-8. ✅ HTTPS via Let's Encrypt with expiry monitoring
-9. ✅ CPU/RAM/disk monitoring with history + Prometheus
-10. ✅ Real-time deployment & container logs (WebSocket)
-11. ✅ Restart / redeploy / rollback / cancel
-12. ✅ Backup & restore (databases and volumes)
+[MIT](LICENSE) © [eka0789](https://github.com/eka0789)
