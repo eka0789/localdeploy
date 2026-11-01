@@ -6,6 +6,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { Topbar } from "@/components/layout";
+import { NotificationsTab, TokensTab } from "@/components/settings-ops";
 import {
   Badge, Button, Card, CardContent, CardHeader, CardTitle, ConfirmDialog, Dialog, Input, Label,
   Select, Skeleton, Switch, TD, TBody, TH, THead, TR, Table,
@@ -14,7 +15,7 @@ import { api } from "@/lib/api";
 import { relTime } from "@/lib/format";
 import type { AuditLogEntry, Role, User } from "@/lib/types";
 
-type Tab = "profile" | "users" | "security";
+type Tab = "profile" | "users" | "security" | "notifications" | "tokens";
 
 export default function SettingsPage() {
   const [tab, setTab] = useState<Tab>("profile");
@@ -22,6 +23,8 @@ export default function SettingsPage() {
   const tabs: Array<{ id: Tab; label: string }> = [
     { id: "profile", label: "Profile" },
     { id: "users", label: "Users & roles" },
+    { id: "notifications", label: "Notifications" },
+    { id: "tokens", label: "API tokens" },
     { id: "security", label: "Audit & security" },
   ];
 
@@ -44,6 +47,8 @@ export default function SettingsPage() {
         </div>
         {tab === "profile" && <ProfileTab />}
         {tab === "users" && <UsersTab />}
+        {tab === "notifications" && <NotificationsTab />}
+        {tab === "tokens" && <TokensTab />}
         {tab === "security" && <SecurityTab />}
       </div>
     </>

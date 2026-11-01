@@ -1,6 +1,7 @@
 """Application management: CRUD, lifecycle actions, env vars, logs, upload."""
 from __future__ import annotations
 
+import asyncio
 import re
 import uuid
 
@@ -431,3 +432,90 @@ async def app_logs_stream(websocket: WebSocket, app_id: uuid.UUID, db: Session =
         pass
     finally:
         await log_hub.unsubscribe(subscriber)
+
+
+@router.websocket("/{app_id}/terminal")
+async def app_terminal(websocket: WebSocket, app_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Interactive container shell over WebSocket (docker exec, cookie auth)."""
+    from ...core.db import utcnow
+    from ...models.user import UserSession
+
+    token = websocket.cookies.get(SESSION_COOKIE)
+    session_row = (db.query(UserSession)
+                   .filter(UserSession.token_hash == hash_token_ws_auth(token or ""),
+                           UserSession.revoked_at.is_(None))
+                   .first() if token else None)
+    if session_row is None or session_row.expires_at < utcnow():
+        await websocket.close(code=4401)
+        return
+
+    app_row = db.query(Application).filter(Application.id == app_id).first()
+    if app_row is None:
+        await websocket.close(code=4404)
+        return
+
+    container = docker_service.get_container(app_row.container_name or f"ld-{app_row.slug}")
+    await websocket.accept()
+    if container is None:
+        await websocket.send_json({"data": "Container is not running - deploy or start it first.\r\n"})
+        await websocket.close()
+        return
+
+    import threading
+
+    client = docker_service.require()
+    try:
+        exec_id = client.api.exec_create(
+            container.id,
+            cmd=["/bin/sh", "-c", "command -v bash >/dev/null 2>&1 && exec bash || exec sh"],
+            stdin=True, tty=True,
+        )["Id"]
+        sock = client.api.exec_start(exec_id, socket=True, tty=True)
+        client.api.exec_resize(exec_id, height=30, width=100)
+    except Exception as exc:
+        await websocket.send_json({"data": f"Failed to attach: {exc}\r\n"})
+        await websocket.close()
+        return
+
+    stop_event = threading.Event()
+    loop = asyncio.get_running_loop()  # the uvicorn loop that owns this websocket
+
+    def pump_output():
+        try:
+            while not stop_event.is_set():
+                data = sock.recv(4096)
+                if not data:
+                    break
+                text = data.decode(errors="replace")
+                asyncio.run_coroutine_threadsafe(
+                    websocket.send_json({"data": text}), loop).result(timeout=5)
+        except Exception:
+            pass
+        finally:
+            stop_event.set()
+
+    threading.Thread(target=pump_output, daemon=True).start()
+    _ = base64  # tty=True gives a raw stream; kept for reference
+
+    try:
+        while not stop_event.is_set():
+            message = await websocket.receive_json()
+            if message.get("type") == "resize":
+                try:
+                    client.api.exec_resize(exec_id, height=int(message.get("rows", 30)),
+                                           width=int(message.get("cols", 100)))
+                except Exception:
+                    pass
+            else:
+                data = message.get("data", "")
+                if data:
+                    sock.sendall(data.encode())
+    except WebSocketDisconnect:
+        pass
+    finally:
+        stop_event.set()
+        try:
+            sock.close()
+        except Exception:
+            pass
+        loop.close()

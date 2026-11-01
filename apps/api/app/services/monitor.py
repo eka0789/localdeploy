@@ -84,6 +84,9 @@ def sample_server_metrics() -> None:
         session.close()
 
 
+_container_states: dict[str, str] = {}
+
+
 def sample_application_metrics() -> None:
     if not docker_service.available:
         return
@@ -101,6 +104,16 @@ def sample_application_metrics() -> None:
             if not app_id:
                 continue
             app_ids.add(app_id)
+
+            # --- container death detection -------------------------------
+            previous = _container_states.get(container.id)
+            container.reload()
+            state = container.status
+            _container_states[container.id] = state
+            if previous == "running" and state in ("exited", "dead", "restarting"):
+                app = session.query(Application).get(app_id)
+                _on_container_died(session, app, state)
+
             try:
                 stats = container.stats(stream=False)
             except Exception:
@@ -171,6 +184,29 @@ def latest_application_metrics(session) -> dict:
         }
         for metric, name, slug in rows
     }
+
+
+def _on_container_died(session, app, state: str) -> None:
+    """A managed container stopped unexpectedly — log it and notify channels."""
+    from .log_hub import log_hub
+    from .notify import dispatch
+
+    name = app.name if app else "unknown"
+    log_hub.publish_sync("system", {
+        "type": "application", "level": "error",
+        "message": f"Container for '{name}' is {state} (unexpected stop)",
+        "application_id": str(app.id) if app else None,
+    })
+    if app:
+        app.status = "error" if state in ("exited", "dead") else "deploying"
+        session.commit()
+    try:
+        dispatch(session, "container.died", {
+            "application_name": name, "status": state,
+            "error": "Container stopped unexpectedly — check logs and restart or redeploy.",
+        })
+    except Exception:
+        pass
 
 
 def _stats_cpu_percent(stats: dict) -> float:

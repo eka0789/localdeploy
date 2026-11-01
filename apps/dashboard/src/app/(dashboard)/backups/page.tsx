@@ -1,18 +1,18 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, Save, Trash2 } from "lucide-react";
+import { CalendarClock, Download, Plus, Save, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
 import { Topbar } from "@/components/layout";
 import {
-  Button, Card, CardContent, CardHeader, CardTitle, ConfirmDialog, Dialog, EmptyState,
+  Badge, Button, Card, CardContent, CardHeader, CardTitle, ConfirmDialog, Dialog, EmptyState,
   Input, Label, Select, Skeleton, StatusBadge, TD, TBody, TH, THead, TR, Table,
 } from "@/components/ui";
 import { API_URL, api } from "@/lib/api";
 import { fmtBytes, relTime } from "@/lib/format";
-import type { BackupRecord, Volume } from "@/lib/types";
+import type { BackupRecord, BackupSchedule, Volume } from "@/lib/types";
 
 export default function BackupsPage() {
   const queryClient = useQueryClient();
@@ -31,6 +31,43 @@ export default function BackupsPage() {
   const { data: volumes } = useQuery<{ volumes: Volume[] }>({
     queryKey: ["storage", "volumes"],
     queryFn: () => api("/api/storage/volumes"),
+  });
+
+  const { data: schedules } = useQuery<BackupSchedule[]>({
+    queryKey: ["backup-schedules"],
+    queryFn: () => api("/api/backups/schedules/all"),
+    refetchInterval: 30_000,
+  });
+
+  const createSchedule = useMutation({
+    mutationFn: (body: Record<string, unknown>) => api("/api/backups/schedules", { method: "POST", body }),
+    onSuccess: () => {
+      toast.success("Backup schedule created — the scheduler runs every minute");
+      queryClient.invalidateQueries({ queryKey: ["backup-schedules"] });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const toggleSchedule = useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
+      api(`/api/backups/schedules/${id}`, { method: "PUT", body: { enabled } }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["backup-schedules"] }),
+    onError: (e) => toast.error(e.message),
+  });
+
+  const deleteSchedule = useMutation({
+    mutationFn: (id: string) => api(`/api/backups/schedules/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      toast.success("Schedule deleted");
+      queryClient.invalidateQueries({ queryKey: ["backup-schedules"] });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const runScheduleNow = useMutation({
+    mutationFn: (id: string) => api(`/api/backups/schedules/${id}/run`, { method: "POST" }),
+    onSuccess: () => { toast.success("Backup will run within 60 seconds"); queryClient.invalidateQueries({ queryKey: ["backups"] }); },
+    onError: (e) => toast.error(e.message),
   });
 
   const createVolumeBackup = useMutation({
@@ -71,7 +108,81 @@ export default function BackupsPage() {
         description="Database dumps and volume archives with restore"
         actions={<Button onClick={() => setCreateOpen(true)}><Save className="h-4 w-4" /> Backup a volume</Button>}
       />
-      <div className="p-8">
+      <div className="space-y-6 p-8">
+        {/* ---------- schedules ---------- */}
+        <Card>
+          <CardHeader className="flex-row items-center justify-between">
+            <CardTitle className="flex items-center gap-2"><CalendarClock className="h-4 w-4" /> Scheduled backups</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {(schedules ?? []).map((schedule) => (
+              <div key={schedule.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-3">
+                <div>
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    {schedule.target_name}
+                    <Badge variant="info">{schedule.target_type}</Badge>
+                    <span className="text-muted-foreground">every {schedule.interval_hours}h · keep {schedule.keep_last}</span>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    last run {schedule.last_run_at ? relTime(schedule.last_run_at) : "never"}
+                    {schedule.last_status === "failed" && (
+                      <span className="text-destructive"> — {schedule.last_error}</span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="outline" onClick={() => runScheduleNow.mutate(schedule.id)}>Run now</Button>
+                  <Button size="sm" variant="ghost" onClick={() => toggleSchedule.mutate({ id: schedule.id, enabled: !schedule.enabled })}>
+                    {schedule.enabled ? "Pause" : "Resume"}
+                  </Button>
+                  <Button size="icon" variant="ghost" onClick={() => deleteSchedule.mutate(schedule.id)} aria-label="Delete schedule">
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+            {!schedules?.length && (
+              <div className="flex flex-wrap items-end gap-3 text-sm">
+                <div className="space-y-1.5">
+                  <Label>Type</Label>
+                  <Select id="sched-type" className="w-36">
+                    <option value="volume">Volume</option>
+                    <option value="database">Database</option>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Target</Label>
+                  <Select id="sched-target" className="w-56">
+                    {(volumes?.volumes ?? []).map((v) => <option key={v.name} value={v.name}>{v.name}</option>)}
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Every (hours)</Label>
+                  <Input id="sched-interval" type="number" defaultValue={24} className="w-24" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Keep last</Label>
+                  <Input id="sched-keep" type="number" defaultValue={7} className="w-20" />
+                </div>
+                <Button
+                  onClick={() => {
+                    const type = (document.getElementById("sched-type") as HTMLSelectElement).value;
+                    const target = (document.getElementById("sched-target") as HTMLSelectElement).value;
+                    const interval = Number((document.getElementById("sched-interval") as HTMLInputElement).value) || 24;
+                    const keep = Number((document.getElementById("sched-keep") as HTMLInputElement).value) || 7;
+                    if (!target) { toast.error("Select a target first"); return; }
+                    createSchedule.mutate({ target_type: type, target_id: target, target_name: target, interval_hours: interval, keep_last: keep });
+                  }}
+                  loading={createSchedule.isPending}
+                >
+                  <Plus className="h-4 w-4" /> Schedule
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* ---------- records ---------- */}
         {isLoading ? (
           <Skeleton className="h-64" />
         ) : !backups?.length ? (

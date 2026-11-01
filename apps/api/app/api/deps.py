@@ -143,10 +143,40 @@ def _bearer_or_cookie_token(request: Request) -> str | None:
     return None
 
 
+def _user_for_api_token(db: Session, token: str) -> User | None:
+    """Resolve a personal access token (ldt_…) to its user."""
+    from ..models.user import ApiToken
+
+    if not token.startswith("ldt_"):
+        return None
+    row = (
+        db.query(ApiToken)
+        .filter(ApiToken.token_hash == hash_token(token), ApiToken.revoked_at.is_(None))
+        .first()
+    )
+    if row is None:
+        return None
+    row.last_used_at = utcnow()
+    db.commit()
+    user = db.query(User).get(row.user_id)
+    if user is None or user.deleted_at is not None or not user.is_active:
+        return None
+    return user
+
+
 def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
     token = _bearer_or_cookie_token(request)
     if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
+
+    # Personal access tokens (CI/CD) take precedence when prefixed ldt_
+    if token.startswith("ldt_"):
+        user = _user_for_api_token(db, token)
+        if user is None:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or revoked API token")
+        request.state.auth_via = "api_token"  # CSRF does not apply to bearer auth
+        return user
+
     session_row = (
         db.query(UserSession)
         .filter(UserSession.token_hash == hash_token(token), UserSession.revoked_at.is_(None))
@@ -174,8 +204,14 @@ def require_permission(permission: str):
 
 
 async def verify_csrf(request: Request, user: User = Depends(get_current_user)) -> None:
-    """Double-submit cookie CSRF check on state-changing requests."""
+    """Double-submit cookie CSRF check on state-changing requests.
+
+    Skipped for Bearer API-token auth — CSRF attacks ride on ambient cookie
+    credentials, which bearer tokens are not.
+    """
     if request.method in SAFE_METHODS:
+        return
+    if getattr(request.state, "auth_via", None) == "api_token":
         return
     cookie_token = request.cookies.get(CSRF_COOKIE)
     header_token = request.headers.get(CSRF_HEADER)

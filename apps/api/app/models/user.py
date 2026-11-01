@@ -82,6 +82,27 @@ class UserSession(Base, UUIDPk):
     __table_args__ = (Index("ix_user_sessions_user_expires", "user_id", "expires_at"),)
 
 
+class ApiToken(Base, UUIDPk):
+    """Personal access token for CI/CD (Authorization: Bearer ldt_…).
+
+    Only the SHA-256 hash is stored; the plaintext is shown once at creation.
+    """
+
+    __tablename__ = "api_tokens"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(120))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    token_prefix: Mapped[str] = mapped_column(String(12))  # e.g. ldt_ab12… for display
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    user: Mapped[User] = relationship(lazy="selectin")
+
+
 class AuditLog(Base, UUIDPk):
     __tablename__ = "audit_logs"
 

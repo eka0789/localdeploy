@@ -100,6 +100,7 @@ def run_deployment(deployment_id: uuid_mod.UUID) -> None:
             dep.error_message = str(exc)[:2000]
             _Logger(dep.id, session).log(f"✖ Deployment failed: {exc}")
             session.commit()
+            _notify_result(session, dep)
     except DockerUnavailableError as exc:
         session.rollback()
         dep = session.query(Deployment).get(deployment_id)
@@ -109,6 +110,7 @@ def run_deployment(deployment_id: uuid_mod.UUID) -> None:
             dep.error_message = str(exc)[:2000]
             _Logger(dep.id, session).log(f"✖ Docker unavailable: {exc}")
             session.commit()
+            _notify_result(session, dep)
     except Exception as exc:  # unexpected — never leave a deployment "running"
         session.rollback()
         dep = session.query(Deployment).get(deployment_id)
@@ -118,8 +120,26 @@ def run_deployment(deployment_id: uuid_mod.UUID) -> None:
             dep.error_message = f"{type(exc).__name__}: {exc}"[:2000]
             _Logger(dep.id, session).log(f"✖ Internal error: {exc}\n{traceback.format_exc(limit=3)}")
             session.commit()
+            _notify_result(session, dep)
     finally:
         session.close()
+
+
+def _notify_result(session, deployment) -> None:
+    """Fire notification channels for a finished deployment (never raises)."""
+    try:
+        from .notify import dispatch
+
+        app = session.query(Application).get(deployment.application_id)
+        dispatch(session, f"deployment.{deployment.status}", {
+            "application_name": app.name if app else "?",
+            "status": deployment.status,
+            "commit": (deployment.git_commit_sha or "")[:8],
+            "error": deployment.error_message,
+            "duration": f"{deployment.build_duration_ms / 1000:.1f}s" if deployment.build_duration_ms else None,
+        })
+    except Exception:
+        pass
 
 
 def _execute(session, deployment_id: uuid_mod.UUID) -> None:
@@ -508,11 +528,51 @@ def _finish(session, deployment, app, started) -> None:
     logger = _Logger(deployment.id, session)
     logger.log(f"✔ Deployment successful in {deployment.build_duration_ms / 1000:.1f}s")
     session.commit()
+    _prune_old_images(session, app)
+    _notify_result(session, deployment)
     log_hub.publish_sync("system", {
         "type": "deployment", "level": "success",
         "message": f"Application '{app.name}' deployed successfully",
         "application_id": str(app.id), "deployment_id": str(deployment.id),
     })
+
+
+KEEP_IMAGES = 3
+
+
+def _prune_old_images(session, app, keep: int = KEEP_IMAGES) -> None:
+    """Delete old deployment images beyond the newest `keep` (disk hygiene)."""
+    try:
+        if app.source_type == "compose":
+            return
+        client = docker_service.client()
+        if client is None:
+            return
+        prefix = f"{settings.image_prefix}/{app.slug}:"
+        images = [img for img in client.images.list() for tag in (img.tags or []) if tag.startswith(prefix)]
+        images.sort(key=lambda i: i.attrs.get("Created", 0), reverse=True)
+        running_tag = None
+        current = docker_service.get_container(app.container_name or f"ld-{app.slug}")
+        if current is not None:
+            tags = current.image.tags or []
+            running_tag = tags[0] if tags else None
+        removed = 0
+        for image in images[keep:]:
+            if running_tag and running_tag in (image.tags or []):
+                continue  # never remove the image the running container uses
+            try:
+                client.images.remove(image.id, force=False)
+                removed += 1
+            except Exception:
+                continue  # in use by an old container — leave it
+        if removed:
+            log_hub.publish_sync("system", {
+                "type": "deployment", "level": "info",
+                "message": f"Pruned {removed} old image(s) for '{app.name}' (keeping {keep})",
+                "application_id": str(app.id),
+            })
+    except Exception:
+        pass  # pruning must never fail a deployment
 
 
 # ---------------------------------------------------------------------------

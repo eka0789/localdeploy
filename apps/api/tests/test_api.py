@@ -210,7 +210,10 @@ def test_prometheus_metrics_endpoint(client):
 
 
 def test_viewer_role_cannot_write(client, db):
-    """RBAC: viewer role is read-only."""
+    """RBAC: viewer role is read-only. Runs in an isolated cookie jar so the
+    shared admin session is not clobbered for subsequent tests."""
+    import http.cookiejar
+
     from app.models.user import Role, User
 
     from app.core.security import hash_password
@@ -221,12 +224,17 @@ def test_viewer_role_cannot_write(client, db):
     db.add(user)
     db.commit()
 
-    login = client.post("/api/auth/login", json={"username": "viewer1", "password": "password123"})
-    assert login.status_code == 200
-    csrf = login.json()["csrf_token"]
-    resp = client.post("/api/projects", json={"name": "Forbidden"},
-                       headers={"X-CSRF-Token": csrf})
-    assert resp.status_code == 403
+    saved_jar = client.cookies.jar
+    client.cookies = http.cookiejar.CookieJar()
+    try:
+        login = client.post("/api/auth/login", json={"username": "viewer1", "password": "password123"})
+        assert login.status_code == 200
+        csrf = login.json()["csrf_token"]
+        resp = client.post("/api/projects", json={"name": "Forbidden"},
+                           headers={"X-CSRF-Token": csrf})
+        assert resp.status_code == 403
 
-    # read is allowed
-    assert client.get("/api/projects").status_code == 200
+        # read is allowed
+        assert client.get("/api/projects").status_code == 200
+    finally:
+        client.cookies = saved_jar

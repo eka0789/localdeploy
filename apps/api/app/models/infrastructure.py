@@ -112,3 +112,40 @@ class ApplicationDatabaseLink(Base, UUIDPk, TimestampMixin):
         Uuid, ForeignKey("database_connections.id", ondelete="CASCADE"), index=True
     )
     env_mapping: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class NotificationChannel(Base, UUIDPk, TimestampMixin):
+    """Outbound notification channel (Discord/Telegram/Slack/generic webhook).
+
+    Fired on deployment success/failure and container-death events. Secrets are
+    stored encrypted.
+    """
+
+    __tablename__ = "notification_channels"
+
+    name: Mapped[str] = mapped_column(String(120))
+    type: Mapped[str] = mapped_column(String(20))  # discord|telegram|slack|webhook
+    url_encrypted: Mapped[str | None] = mapped_column(Text)  # webhook URL
+    bot_token_encrypted: Mapped[str | None] = mapped_column(Text)  # telegram bot token
+    chat_id: Mapped[str | None] = mapped_column(String(120))  # telegram chat id
+    events: Mapped[list] = mapped_column(JSON, default=lambda: ["deployment.success", "deployment.failed", "container.died"])
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+
+class BackupSchedule(Base, UUIDPk, TimestampMixin):
+    """Recurring backup rule for a database instance or a Docker volume."""
+
+    __tablename__ = "backup_schedules"
+
+    target_type: Mapped[str] = mapped_column(String(20))  # database|volume
+    target_id: Mapped[str] = mapped_column(String(64), index=True)
+    target_name: Mapped[str] = mapped_column(String(255))
+    interval_hours: Mapped[int] = mapped_column(Integer, default=24)
+    keep_last: Mapped[int] = mapped_column(Integer, default=7)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_status: Mapped[str | None] = mapped_column(String(20))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_by_name: Mapped[str | None] = mapped_column(String(64))

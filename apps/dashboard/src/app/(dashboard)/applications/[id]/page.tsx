@@ -12,6 +12,8 @@ import { toast } from "sonner";
 
 import { Topbar } from "@/components/layout";
 import { AppDatabaseLinks } from "@/components/external-db";
+import { ContainerTerminal } from "@/components/container-terminal";
+import { ResourceChart } from "@/components/charts";
 import {
   Badge, Button, Card, CardContent, CardHeader, CardTitle, ConfirmDialog, Dialog, EmptyState,
   Input, Label, Select, Skeleton, StatusBadge, Switch, TD, TBody, TH, THead, TR, Table, Textarea,
@@ -21,7 +23,7 @@ import { fmtDate, fmtDuration, relTime } from "@/lib/format";
 import { useLogStream } from "@/lib/use-log-stream";
 import type { Application, ApplicationDetail, Deployment, Domain, EnvVar } from "@/lib/types";
 
-type Tab = "overview" | "deployments" | "domains" | "databases" | "env" | "logs" | "settings";
+type Tab = "overview" | "deployments" | "domains" | "databases" | "terminal" | "env" | "logs" | "settings";
 
 export default function ApplicationDetailPage() {
   const params = useParams<{ id: string }>();
@@ -76,6 +78,7 @@ export default function ApplicationDetailPage() {
     { id: "domains", label: "Domains", icon: Globe },
     { id: "databases", label: "Databases", icon: KeyRound },
     { id: "env", label: "Environment", icon: KeyRound },
+    { id: "terminal", label: "Terminal", icon: Terminal },
     { id: "logs", label: "Logs", icon: Terminal },
     { id: "settings", label: "Settings", icon: Settings2 },
   ];
@@ -128,6 +131,7 @@ export default function ApplicationDetailPage() {
         {tab === "domains" && <DomainsTab app={app} onChanged={invalidate} />}
         {tab === "databases" && <AppDatabaseLinks appId={appId} />}
         {tab === "env" && <EnvTab appId={appId} />}
+        {tab === "terminal" && <ContainerTerminal appId={appId} />}
         {tab === "logs" && <LogsTab app={app} />}
         {tab === "settings" && <SettingsTab app={app} onChanged={invalidate} onDelete={() => remove.mutate()} />}
       </div>
@@ -178,6 +182,7 @@ function OverviewTab({ app, appId, onChanged }: { app: ApplicationDetail; appId:
           </CardContent>
         </Card>
       )}
+      <AppMetricsChart appId={appId} />
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader><CardTitle>Source</CardTitle></CardHeader>
@@ -205,6 +210,45 @@ function OverviewTab({ app, appId, onChanged }: { app: ApplicationDetail; appId:
         </Card>
       </div>
     </div>
+  );
+}
+
+function AppMetricsChart({ appId }: { appId: string }) {
+  interface AppMetricPoint {
+    sampled_at: string;
+    cpu_percent: number;
+    memory_usage_mb: number;
+  }
+  const { data: history } = useQuery<AppMetricPoint[]>({
+    queryKey: ["app-metrics-history", appId],
+    queryFn: () => api(`/api/monitoring/applications/${appId}/history?hours=6`),
+    refetchInterval: 15_000,
+  });
+  const chartData = (history ?? []).map((point) => ({
+    t: new Date(point.sampled_at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }),
+    cpu: point.cpu_percent,
+    memory: point.memory_usage_mb,
+  }));
+  return (
+    <Card>
+      <CardHeader><CardTitle>Resource usage (6h)</CardTitle></CardHeader>
+      <CardContent>
+        {!history?.length ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            No samples yet — metrics appear after the container has been running for a while.
+          </p>
+        ) : (
+          <ResourceChart
+            data={chartData}
+            height={220}
+            series={[
+              { key: "cpu", label: "CPU %", color: "hsl(160 74% 42%)" },
+              { key: "memory", label: "Memory MB", color: "hsl(217 91% 58%)" },
+            ]}
+          />
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

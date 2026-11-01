@@ -10,13 +10,13 @@ from fastapi.responses import JSONResponse
 
 from .api.deps import record_metrics
 from .api.routes import (applications, auth, backups, databases, db_connections, deployments,
-                         domains, docker, logs, monitoring, networking, projects, storage,
-                         users, webhooks)
+                         domains, docker, logs, monitoring, networking, notifications, projects,
+                         storage, users, webhooks)
 from .api.routes import settings as settings_routes
 from .core.config import settings
 from .core.db import bootstrap
 from .services.log_hub import log_hub
-from .services.worker import metrics_sampler, session_cleaner, worker
+from .services.worker import backup_scheduler, metrics_sampler, session_cleaner, worker
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,6 +49,7 @@ async def lifespan(app: FastAPI):
 
     metrics_task = asyncio.create_task(metrics_sampler())
     session_task = asyncio.create_task(session_cleaner())
+    backup_task = asyncio.create_task(backup_scheduler())
 
     await log_hub.publish("system", {
         "type": "platform", "level": "info",
@@ -58,6 +59,7 @@ async def lifespan(app: FastAPI):
     yield
     metrics_task.cancel()
     session_task.cancel()
+    backup_task.cancel()
     await worker.stop()
     logger.info("LocalDeploy API stopped")
 
@@ -128,6 +130,6 @@ for router in (
     auth.router, users.router, projects.router, applications.router, deployments.router,
     domains.router, webhooks.router, docker.router, storage.router, databases.router,
     backups.router, monitoring.router, logs.router, networking.router, settings_routes.router,
-    db_connections.router,
+    db_connections.router, notifications.router,
 ):
     app.include_router(router)

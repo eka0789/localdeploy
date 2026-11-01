@@ -1,6 +1,8 @@
 """Authentication routes."""
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
@@ -15,6 +17,7 @@ from ..deps import (
     get_current_user,
     login_limiter,
     record_audit,
+    verify_csrf,
     set_csrf_cookie,
     set_session_cookie,
 )
@@ -95,4 +98,61 @@ def change_password(payload: ChangePasswordRequest, request: Request,
     query.update({"revoked_at": utcnow()}, synchronize_session=False)
     db.commit()
     record_audit(db, user, "auth.change_password", "user", str(user.id), {}, request)
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------ API tokens
+
+@router.get("/tokens")
+def list_tokens(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from ...models.user import ApiToken
+
+    tokens = (db.query(ApiToken)
+              .filter(ApiToken.user_id == user.id, ApiToken.revoked_at.is_(None))
+              .order_by(ApiToken.created_at.desc()).all())
+    return [{
+        "id": str(t.id), "name": t.name, "prefix": t.token_prefix,
+        "last_used_at": t.last_used_at.isoformat() if t.last_used_at else None,
+        "created_at": t.created_at.isoformat(),
+    } for t in tokens]
+
+
+@router.post("/tokens", status_code=201, dependencies=[Depends(verify_csrf)])
+def create_token(payload: dict, request: Request,
+                 user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Create a personal access token - plaintext shown exactly once."""
+    from ...core.security import hash_token, new_session_token
+    from ...models.user import ApiToken
+
+    name = str(payload.get("name", "")).strip() or "API token"
+    token = "ldt_" + new_session_token()
+    row = ApiToken(
+        user_id=user.id, name=name,
+        token_hash=hash_token(token),
+        token_prefix=token[:12],
+    )
+    db.add(row)
+    db.commit()
+    record_audit(db, user, "auth.token_create", "api_token", str(row.id), {"name": name}, request)
+    return {
+        "id": str(row.id), "name": name, "token": token,  # shown exactly once
+        "created_at": row.created_at.isoformat(),
+        "usage": (
+            f'curl -X POST "{app_settings.public_base_url}/api/applications/<APP_ID>/deploy" '
+            f'-H "Authorization: Bearer {token}"'
+        ),
+    }
+
+
+@router.delete("/tokens/{token_id}", dependencies=[Depends(verify_csrf)])
+def revoke_token(token_id: uuid.UUID, request: Request,
+                 user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from ...models.user import ApiToken
+
+    row = db.query(ApiToken).filter(ApiToken.id == token_id, ApiToken.user_id == user.id).first()
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Token not found")
+    row.revoked_at = utcnow()
+    db.commit()
+    record_audit(db, user, "auth.token_revoke", "api_token", str(row.id), {"name": row.name}, request)
     return {"ok": True}

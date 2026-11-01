@@ -151,3 +151,98 @@ def delete_backup(backup_id: uuid.UUID, request: Request,
     db.commit()
     record_audit(db, user, "backups.delete", "backup", str(backup_id), {}, request)
     return {"ok": True}
+
+
+# ------------------------------------------------------------------ schedules
+
+@router.get("/schedules/all")
+def list_schedules(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from ...models.infrastructure import BackupSchedule
+
+    schedules = db.query(BackupSchedule).order_by(BackupSchedule.created_at).all()
+    return [{
+        "id": str(s.id), "target_type": s.target_type, "target_id": s.target_id,
+        "target_name": s.target_name, "interval_hours": s.interval_hours,
+        "keep_last": s.keep_last, "enabled": s.enabled,
+        "last_run_at": s.last_run_at.isoformat() if s.last_run_at else None,
+        "last_status": s.last_status, "last_error": s.last_error,
+        "created_at": s.created_at.isoformat(),
+    } for s in schedules]
+
+
+@router.post("/schedules", status_code=201, dependencies=[Depends(verify_csrf)])
+def create_schedule(payload: dict, request: Request,
+                    user: User = Depends(require_permission("backups.write")),
+                    db: Session = Depends(get_db)):
+    from ...models.infrastructure import BackupSchedule
+
+    target_type = payload.get("target_type")
+    if target_type not in ("database", "volume"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "target_type must be database|volume")
+    schedule = BackupSchedule(
+        target_type=target_type,
+        target_id=str(payload.get("target_id", "")),
+        target_name=str(payload.get("target_name", "")),
+        interval_hours=int(payload.get("interval_hours", 24)),
+        keep_last=int(payload.get("keep_last", 7)),
+        created_by_name=user.username,
+    )
+    if not schedule.target_id or not schedule.target_name:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "target_id and target_name are required")
+    db.add(schedule)
+    db.commit()
+    record_audit(db, user, "backups.schedule.create", "backup_schedule", str(schedule.id),
+                 {"target": schedule.target_name, "interval": schedule.interval_hours}, request)
+    return {"ok": True, "id": str(schedule.id)}
+
+
+@router.put("/schedules/{schedule_id}", dependencies=[Depends(verify_csrf)])
+def update_schedule(schedule_id: uuid.UUID, payload: dict, request: Request,
+                    user: User = Depends(require_permission("backups.write")),
+                    db: Session = Depends(get_db)):
+    from ...models.infrastructure import BackupSchedule
+
+    schedule = db.query(BackupSchedule).get(schedule_id)
+    if schedule is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Schedule not found")
+    if "enabled" in payload:
+        schedule.enabled = bool(payload["enabled"])
+    if "interval_hours" in payload:
+        schedule.interval_hours = max(1, int(payload["interval_hours"]))
+    if "keep_last" in payload:
+        schedule.keep_last = max(1, int(payload["keep_last"]))
+    db.commit()
+    record_audit(db, user, "backups.schedule.update", "backup_schedule", str(schedule.id), {}, request)
+    return {"ok": True}
+
+
+@router.delete("/schedules/{schedule_id}", dependencies=[Depends(verify_csrf)])
+def delete_schedule(schedule_id: uuid.UUID, request: Request,
+                    user: User = Depends(require_permission("backups.write")),
+                    db: Session = Depends(get_db)):
+    from ...models.infrastructure import BackupSchedule
+
+    schedule = db.query(BackupSchedule).get(schedule_id)
+    if schedule is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Schedule not found")
+    db.delete(schedule)
+    db.commit()
+    record_audit(db, user, "backups.schedule.delete", "backup_schedule", None,
+                 {"target": schedule.target_name}, request)
+    return {"ok": True}
+
+
+@router.post("/schedules/{schedule_id}/run", status_code=202, dependencies=[Depends(verify_csrf)])
+def run_schedule_now(schedule_id: uuid.UUID,
+                     user: User = Depends(require_permission("backups.write")),
+                     db: Session = Depends(get_db)):
+    """Force a schedule to run on the next scheduler tick (within 60s)."""
+    from ...models.infrastructure import BackupSchedule
+
+    schedule = db.query(BackupSchedule).get(schedule_id)
+    if schedule is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Schedule not found")
+    schedule.last_run_at = None  # makes it due immediately
+    db.commit()
+    record_audit(db, user, "backups.schedule.run_now", "backup_schedule", str(schedule.id), {}, request)
+    return {"ok": True, "message": "Backup will start within 60 seconds"}

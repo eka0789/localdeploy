@@ -326,3 +326,41 @@ export interface CloudflareStatus {
   zones?: CloudflareZone[];
   tunnels?: CloudflareTunnelInfo[];
 }
+
+/* ---------------- Notifications / API tokens / Backup schedules ---------------- */
+
+export interface NotificationChannel {
+  id: string;
+  name: string;
+  type: "discord" | "telegram" | "slack" | "webhook";
+  has_url: boolean;
+  has_bot_token: boolean;
+  chat_id: string | null;
+  events: string[];
+  is_active: boolean;
+  last_sent_at: string | null;
+  last_error: string | null;
+  created_at: string;
+}
+
+export interface ApiToken {
+  id: string;
+  name: string;
+  prefix: string;
+  last_used_at: string | null;
+  created_at: string;
+}
+
+export interface BackupSchedule {
+  id: string;
+  target_type: "database" | "volume";
+  target_id: string;
+  target_name: string;
+  interval_hours: number;
+  keep_last: number;
+  enabled: boolean;
+  last_run_at: string | null;
+  last_status: string | null;
+  last_error: string | null;
+  created_at: string;
+}

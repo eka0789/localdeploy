@@ -109,11 +109,130 @@ async def session_cleaner() -> None:
     while True:
         try:
             await asyncio.to_thread(purge_expired_sessions, SessionLocal())
+            await asyncio.to_thread(purge_old_logs, SessionLocal())
         except asyncio.CancelledError:
             raise
         except Exception:
             pass
         await asyncio.sleep(3600)
+
+
+def purge_old_logs(db) -> None:
+    """Retention policy: deployment logs 30d, audit logs 180d (configurable via env)."""
+    from datetime import timedelta
+
+    import os
+
+    from ..models.deployment import DeploymentLog
+    from ..models.user import AuditLog
+
+    log_days = int(os.environ.get("LOCALDEPLOY_LOG_RETENTION_DAYS", "30"))
+    audit_days = int(os.environ.get("LOCALDEPLOY_AUDIT_RETENTION_DAYS", "180"))
+    cutoff_logs = utcnow() - timedelta(days=log_days)
+    cutoff_audit = utcnow() - timedelta(days=audit_days)
+    db.query(DeploymentLog).filter(DeploymentLog.created_at < cutoff_logs).delete(synchronize_session=False)
+    db.query(AuditLog).filter(AuditLog.created_at < cutoff_audit).delete(synchronize_session=False)
+    db.commit()
+
+
+def run_due_backup_schedules() -> int:
+    """Run any enabled backup schedule whose interval has elapsed. Returns count."""
+    from datetime import timedelta
+
+    from ..models.deployment import BackupRecord
+    from ..models.infrastructure import BackupSchedule, DatabaseInstance
+    from . import backups as backup_service
+
+    session = SessionLocal()
+    ran = 0
+    try:
+        schedules = session.query(BackupSchedule).filter_by(enabled=True).all()
+        now = utcnow()
+        for schedule in schedules:
+            due = schedule.last_run_at is None or (
+                now - schedule.last_run_at >= timedelta(hours=schedule.interval_hours)
+            )
+            if not due:
+                continue
+            ran += 1
+            schedule.last_run_at = now
+            filename = (
+                f"auto-{schedule.target_name}-{now.strftime('%Y%m%d-%H%M%S')}"
+                + (".sql" if schedule.target_type == "database" else ".tar.gz")
+            )
+            record = BackupRecord(
+                target_type=schedule.target_type, target_id=schedule.target_id,
+                target_name=f"[auto] {schedule.target_name}",
+                file_path=str(backup_service.backup_file_path(filename)),
+                status="running", created_by_name="schedule",
+            )
+            session.add(record)
+            session.commit()
+            try:
+                if schedule.target_type == "database":
+                    instance = session.query(DatabaseInstance).filter(
+                        DatabaseInstance.id == schedule.target_id,
+                        DatabaseInstance.deleted_at.is_(None)).first()
+                    if instance is None:
+                        raise RuntimeError("Database instance no longer exists")
+                    path = backup_service.backup_database(instance, filename)
+                else:
+                    path = backup_service.backup_volume(schedule.target_id, filename)
+                backup_service.finalize_record(record, path)
+                schedule.last_status = "success"
+                schedule.last_error = None
+            except Exception as exc:
+                record = session.query(BackupRecord).get(record.id)
+                record.status = "failed"
+                record.error_message = str(exc)[:1000]
+                schedule.last_status = "failed"
+                schedule.last_error = str(exc)[:500]
+            session.commit()
+            _prune_schedule_backups(session, schedule)
+        return ran
+    finally:
+        session.close()
+
+
+def _prune_schedule_backups(session, schedule, ) -> None:
+    """Keep only the newest `keep_last` successful auto backups for this schedule."""
+    from ..models.deployment import BackupRecord
+    from . import backups as backup_service
+
+    records = (
+        session.query(BackupRecord)
+        .filter(BackupRecord.target_id == schedule.target_id,
+                BackupRecord.target_name.like("[auto]%"),
+                BackupRecord.status == "success")
+        .order_by(BackupRecord.created_at.desc())
+        .all()
+    )
+    for record in records[schedule.keep_last:]:
+        path = backup_service.backup_file_path((record.file_path or "").replace("\\", "/").split("/")[-1])
+        try:
+            if path.exists():
+                path.unlink()
+        except OSError:
+            pass
+        session.delete(record)
+    session.commit()
+
+
+async def backup_scheduler() -> None:
+    """Periodic backup schedule runner (every 60s)."""
+    while True:
+        try:
+            count = await asyncio.to_thread(run_due_backup_schedules)
+            if count:
+                await log_hub.publish("system", {
+                    "type": "backup", "level": "info",
+                    "message": f"Backup scheduler ran {count} scheduled backup(s)",
+                })
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+        await asyncio.sleep(60)
 
 
 def utcnow_ts() -> datetime:
