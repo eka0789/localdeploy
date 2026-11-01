@@ -26,12 +26,17 @@ export default function ApplicationsPage() {
     refetchInterval: 8_000,
   });
 
+  const [kindFilter, setKindFilter] = useState<"all" | "apps" | "previews">("all");
   const filtered = useMemo(
-    () => (apps ?? []).filter((a) =>
-      a.name.toLowerCase().includes(search.toLowerCase()) ||
-      a.slug.includes(search.toLowerCase()) ||
-      a.domains.some((d) => d.includes(search.toLowerCase()))),
-    [apps, search],
+    () => (apps ?? [])
+      .filter((a) => kindFilter === "all" ||
+        (kindFilter === "apps" && !a.is_preview) ||
+        (kindFilter === "previews" && a.is_preview))
+      .filter((a) =>
+        a.name.toLowerCase().includes(search.toLowerCase()) ||
+        a.slug.includes(search.toLowerCase()) ||
+        a.domains.some((d) => d.includes(search.toLowerCase()))),
+    [apps, search, kindFilter],
   );
 
   return (
@@ -46,6 +51,16 @@ export default function ApplicationsPage() {
         }
       />
       <div className="space-y-4 p-8">
+        <div className="flex flex-wrap items-center gap-2">
+          {(["all", "apps", "previews"] as const).map((k) => (
+            <button key={k} onClick={() => setKindFilter(k)}
+              className={`rounded-lg border px-3 py-1.5 text-xs capitalize transition-colors ${
+                kindFilter === k ? "border-primary bg-primary/10 font-medium text-primary" : "border-border text-muted-foreground"
+              }`}>
+              {k === "apps" ? "Applications" : k === "previews" ? "Previews" : "All"}
+            </button>
+          ))}
+        </div>
         <div className="relative max-w-sm">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -85,6 +100,11 @@ export default function ApplicationsPage() {
                       <StatusBadge status={app.status} />
                     </div>
                     <div className="mt-3 flex flex-wrap gap-1.5">
+                      {app.is_preview && (
+                        <span className="rounded-md bg-warning/15 px-2 py-0.5 text-xs text-warning">
+                          Preview PR#{app.pr_number}
+                        </span>
+                      )}
                       <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
                         {app.source_type}
                       </span>

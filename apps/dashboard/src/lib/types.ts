@@ -394,3 +394,12 @@ export interface RemoteServer {
   token_prefix: string;
   created_at: string;
 }
+
+
+/* ---------------- Preview app context ---------------- */
+export interface PreviewInfo {
+  app: Application;
+  parent_name: string;
+  parent_slug: string;
+  url: string | null;
+}

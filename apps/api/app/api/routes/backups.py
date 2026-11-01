@@ -179,6 +179,32 @@ def create_schedule(payload: dict, request: Request,
     target_type = payload.get("target_type")
     if target_type not in ("database", "volume"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "target_type must be database|volume")
+
+    # validate the target actually exists (prevents schedules that can never run)
+    if target_type == "volume":
+        from ...services.docker_client import docker_service
+
+        if not docker_service.available:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Docker Engine is not reachable")
+        client = docker_service.require()
+        try:
+            client.volumes.get(str(payload.get("target_id", "")))
+        except Exception:
+            raise HTTPException(status.HTTP_404_NOT_FOUND,
+                                f"Volume '{payload.get('target_id')}' does not exist")
+    else:
+        from ...models.infrastructure import DatabaseInstance
+
+        try:
+            target_uuid = uuid.UUID(str(payload.get("target_id", "")))
+        except ValueError:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid target_id")
+        if not db.query(DatabaseInstance).filter(
+                DatabaseInstance.id == target_uuid,
+                DatabaseInstance.deleted_at.is_(None)).first():
+            raise HTTPException(status.HTTP_404_NOT_FOUND,
+                                "Database instance does not exist")
+
     schedule = BackupSchedule(
         target_type=target_type,
         target_id=str(payload.get("target_id", "")),

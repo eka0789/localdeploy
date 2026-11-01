@@ -1,7 +1,8 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { Gauge } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { Gauge, RotateCcw, Rocket, Square } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
@@ -103,11 +104,24 @@ function DeploymentDetail({ className }: { className?: string }) {
     return () => window.removeEventListener("select-deployment", handler);
   }, []);
 
+  const queryClient = useQueryClient();
   const { data: deployment } = useQuery<Deployment>({
     queryKey: ["deployment", selectedId],
     queryFn: () => api(`/api/deployments/${selectedId}`),
     enabled: !!selectedId,
     refetchInterval: 3_000,
+  });
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["deployment", selectedId] });
+  const action = useMutation({
+    mutationFn: ({ id, act }: { id: string; act: string }) =>
+      api(`/api/deployments/${id}/${act}`, { method: "POST" }),
+    onSuccess: (_d, vars) => {
+      toast.success(vars.act === "rollback" ? "Rollback queued" : vars.act === "retry" ? "Retry queued" : "Cancelled");
+      invalidate();
+      queryClient.invalidateQueries({ queryKey: ["deployments"] });
+    },
+    onError: (e) => toast.error(e.message),
   });
 
   const { lines } = useLogStream(selectedId ? `/api/deployments/${selectedId}/stream` : null);
@@ -116,7 +130,26 @@ function DeploymentDetail({ className }: { className?: string }) {
     <Card className={className}>
       <CardHeader className="flex-row items-center justify-between">
         <CardTitle>Deployment detail</CardTitle>
-        {deployment && <StatusBadge status={deployment.status} />}
+        {deployment && (
+          <div className="flex items-center gap-2">
+            <StatusBadge status={deployment.status} />
+            {selectedId && (deployment.status === "queued" || deployment.status === "running") && (
+              <Button size="sm" variant="destructive" onClick={() => action.mutate({ id: selectedId, act: "cancel" })}>
+                <Square className="h-3.5 w-3.5" /> Cancel
+              </Button>
+            )}
+            {selectedId && deployment.status === "failed" && (
+              <Button size="sm" variant="outline" onClick={() => action.mutate({ id: selectedId, act: "retry" })}>
+                <RotateCcw className="h-3.5 w-3.5" /> Retry
+              </Button>
+            )}
+            {selectedId && deployment.status === "success" && (
+              <Button size="sm" variant="outline" onClick={() => action.mutate({ id: selectedId, act: "rollback" })}>
+                <Rocket className="h-3.5 w-3.5" /> Rollback
+              </Button>
+            )}
+          </div>
+        )}
       </CardHeader>
       <CardContent>
         {!selectedId ? (

@@ -12,7 +12,7 @@ import {
 } from "@/components/ui";
 import { API_URL, api } from "@/lib/api";
 import { fmtBytes, relTime } from "@/lib/format";
-import type { BackupRecord, BackupSchedule, Volume } from "@/lib/types";
+import type { BackupRecord, BackupSchedule, DatabaseInstance, Volume } from "@/lib/types";
 
 export default function BackupsPage() {
   const queryClient = useQueryClient();
@@ -21,6 +21,8 @@ export default function BackupsPage() {
   const [restoreId, setRestoreId] = useState<BackupRecord | null>(null);
   const [targetVolume, setTargetVolume] = useState("");
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [schedOpen, setSchedOpen] = useState(false);
+  const [schedForm, setSchedForm] = useState({ target_type: "volume", target_id: "", interval_hours: "24", keep_last: "7" });
 
   const { data: backups, isLoading } = useQuery<BackupRecord[]>({
     queryKey: ["backups"],
@@ -31,6 +33,11 @@ export default function BackupsPage() {
   const { data: volumes } = useQuery<{ volumes: Volume[] }>({
     queryKey: ["storage", "volumes"],
     queryFn: () => api("/api/storage/volumes"),
+  });
+
+  const { data: databases } = useQuery<DatabaseInstance[]>({
+    queryKey: ["databases"],
+    queryFn: () => api("/api/databases"),
   });
 
   const { data: schedules } = useQuery<BackupSchedule[]>({
@@ -115,6 +122,11 @@ export default function BackupsPage() {
             <CardTitle className="flex items-center gap-2"><CalendarClock className="h-4 w-4" /> Scheduled backups</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
+            <div className="flex justify-end">
+              <Button size="sm" onClick={() => setSchedOpen(true)}>
+                <Plus className="h-4 w-4" /> Add schedule
+              </Button>
+            </div>
             {(schedules ?? []).map((schedule) => (
               <div key={schedule.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-3">
                 <div>
@@ -142,42 +154,9 @@ export default function BackupsPage() {
               </div>
             ))}
             {!schedules?.length && (
-              <div className="flex flex-wrap items-end gap-3 text-sm">
-                <div className="space-y-1.5">
-                  <Label>Type</Label>
-                  <Select id="sched-type" className="w-36">
-                    <option value="volume">Volume</option>
-                    <option value="database">Database</option>
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Target</Label>
-                  <Select id="sched-target" className="w-56">
-                    {(volumes?.volumes ?? []).map((v) => <option key={v.name} value={v.name}>{v.name}</option>)}
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Every (hours)</Label>
-                  <Input id="sched-interval" type="number" defaultValue={24} className="w-24" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Keep last</Label>
-                  <Input id="sched-keep" type="number" defaultValue={7} className="w-20" />
-                </div>
-                <Button
-                  onClick={() => {
-                    const type = (document.getElementById("sched-type") as HTMLSelectElement).value;
-                    const target = (document.getElementById("sched-target") as HTMLSelectElement).value;
-                    const interval = Number((document.getElementById("sched-interval") as HTMLInputElement).value) || 24;
-                    const keep = Number((document.getElementById("sched-keep") as HTMLInputElement).value) || 7;
-                    if (!target) { toast.error("Select a target first"); return; }
-                    createSchedule.mutate({ target_type: type, target_id: target, target_name: target, interval_hours: interval, keep_last: keep });
-                  }}
-                  loading={createSchedule.isPending}
-                >
-                  <Plus className="h-4 w-4" /> Schedule
-                </Button>
-              </div>
+              <p className="text-sm text-muted-foreground">
+                No schedules yet — click <strong>Add schedule</strong> to back up a database or volume automatically.
+              </p>
             )}
           </CardContent>
         </Card>
@@ -285,6 +264,72 @@ export default function BackupsPage() {
         title="Delete backup?"
         message="The backup file will be removed from disk permanently."
       />
+
+      <Dialog
+        open={schedOpen} onClose={() => setSchedOpen(false)} title="Add backup schedule"
+        description="Runs automatically; keeps only the newest N backups."
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setSchedOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => {
+                if (!schedForm.target_id) { toast.error("Select a target first"); return; }
+                const targetName = schedForm.target_type === "volume"
+                  ? (volumes?.volumes ?? []).find((v) => v.name === schedForm.target_id)?.name ?? schedForm.target_id
+                  : (databases ?? []).find((d) => d.id === schedForm.target_id)?.name ?? schedForm.target_id;
+                createSchedule.mutate({
+                  target_type: schedForm.target_type,
+                  target_id: schedForm.target_id,
+                  target_name: targetName,
+                  interval_hours: Number(schedForm.interval_hours) || 24,
+                  keep_last: Number(schedForm.keep_last) || 7,
+                });
+                setSchedOpen(false);
+              }}
+              loading={createSchedule.isPending}
+            >
+              Create schedule
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>Type</Label>
+              <Select value={schedForm.target_type}
+                      onChange={(e) => setSchedForm({ ...schedForm, target_type: e.target.value, target_id: "" })}>
+                <option value="volume">Volume</option>
+                <option value="database">Database</option>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Target</Label>
+              <Select value={schedForm.target_id}
+                      onChange={(e) => setSchedForm({ ...schedForm, target_id: e.target.value })}>
+                <option value="">Select…</option>
+                {schedForm.target_type === "volume" &&
+                  (volumes?.volumes ?? []).map((v) => <option key={v.name} value={v.name}>{v.name}</option>)}
+                {schedForm.target_type === "database" &&
+                  (databases ?? []).map((d) => <option key={d.id} value={d.id}>{d.name} ({d.engine})</option>)}
+              </Select>
+            </div>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>Every (hours)</Label>
+              <Input type="number" min={1} value={schedForm.interval_hours}
+                     onChange={(e) => setSchedForm({ ...schedForm, interval_hours: e.target.value })} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Keep last</Label>
+              <Input type="number" min={1} value={schedForm.keep_last}
+                     onChange={(e) => setSchedForm({ ...schedForm, keep_last: e.target.value })} />
+            </div>
+          </div>
+        </div>
+      </Dialog>
+
     </>
   );
 }

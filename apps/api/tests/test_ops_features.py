@@ -89,19 +89,36 @@ def test_api_token_enables_bearer_auth(client, auth, db, sample_app):
 # ----------------------------------------------------------------- schedules
 
 def test_backup_schedule_crud(client, auth, db):
+    from app.models.infrastructure import DatabaseInstance
+
+    instance = DatabaseInstance(
+        name="sched-db", engine="postgresql", image="postgres:16-alpine", version="16-alpine",
+        username="u", password_encrypted="x", port=5432,
+        container_name="ld-db-sched-db", volume_name="ld-db-sched-db-data",
+    )
+    db.add(instance)
+    db.commit()
+
     created = client.post("/api/backups/schedules", headers=auth(), json={
-        "target_type": "volume", "target_id": "ld-db-appdb-data",
-        "target_name": "appdb-data", "interval_hours": 24, "keep_last": 5,
+        "target_type": "database", "target_id": str(instance.id),
+        "target_name": "sched-db", "interval_hours": 24, "keep_last": 5,
     })
     assert created.status_code == 201
 
+    # nonexistent volume target rejected
+    bad_volume = client.post("/api/backups/schedules", headers=auth(), json={
+        "target_type": "volume", "target_id": "no-such-volume",
+        "target_name": "no-such-volume", "interval_hours": 24, "keep_last": 5,
+    })
+    assert bad_volume.status_code in (404, 503)  # 404 validated, 503 when docker offline
+
     schedules = client.get("/api/backups/schedules/all").json()
-    assert any(s["target_name"] == "appdb-data" for s in schedules)
+    assert any(s["target_name"] == "sched-db" for s in schedules)
 
     updated = client.put(f"/api/backups/schedules/{created.json()['id']}",
                          headers=auth(), json={"enabled": False, "interval_hours": 12})
     assert updated.status_code == 200
-    row = db.query(BackupSchedule).filter_by(target_name="appdb-data").first()
+    row = db.query(BackupSchedule).filter_by(target_name="sched-db").first()
     assert row.enabled is False and row.interval_hours == 12
 
     # invalid target type rejected

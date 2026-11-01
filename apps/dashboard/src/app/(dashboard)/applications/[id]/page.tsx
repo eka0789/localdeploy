@@ -846,7 +846,7 @@ function PreviewsTab({ app }: { app: ApplicationDetail }) {
   });
 
   if (app.is_preview) {
-    return <p className="text-sm text-muted-foreground">This application IS a preview deployment.</p>;
+    return <PreviewAppInfo app={app} onDelete={() => remove.mutate(app.id)} deleting={remove.isPending} />;
   }
 
   return (
@@ -914,6 +914,90 @@ function PreviewsTab({ app }: { app: ApplicationDetail }) {
         onConfirm={() => confirmDelete && remove.mutate(confirmDelete)}
         title="Delete preview?"
         message="Stops its container and removes the preview application."
+      />
+    </div>
+  );
+}
+
+function PreviewAppInfo({ app, onDelete, deleting }: {
+  app: ApplicationDetail;
+  onDelete: () => void;
+  deleting: boolean;
+}) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const { data: parent } = useQuery<Application>({
+    queryKey: ["application", app.preview_of],
+    queryFn: () => api(`/api/applications/${app.preview_of}`),
+    enabled: !!app.preview_of,
+  });
+  const { data: deployments } = useQuery<Deployment[]>({
+    queryKey: ["deployments", app.id],
+    queryFn: () => api(`/api/deployments?application_id=${app.id}&limit=1`),
+    refetchInterval: 8_000,
+  });
+  const latest = deployments?.[0];
+  const domain = app.domains[0];
+
+  return (
+    <div className="space-y-4">
+      <Card className="border-info/40">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            Preview environment — PR#{app.pr_number}
+            <StatusBadge status={app.status} />
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Isolated deployment of{" "}
+            {parent ? (
+              <Link href={`/applications/${parent.id}`} className="text-primary hover:underline">
+                {parent.name}
+              </Link>
+            ) : "the parent application"}{" "}
+            from branch <code className="text-xs">{app.git_branch}</code>.
+            It is automatically cleaned up when the PR is closed or after the retention window.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <div className="flex flex-wrap items-center gap-2">
+            {domain && (
+              <a href={`https://${domain}`} target="_blank" rel="noreferrer"
+                 className="rounded-lg bg-primary/10 px-3 py-1.5 text-primary hover:bg-primary/20">
+                Open preview ↗ {domain}
+              </a>
+            )}
+            <Button size="sm" variant="outline" onClick={() => setConfirmDelete(true)} loading={deleting}>
+              <Trash2 className="h-4 w-4 text-destructive" /> Delete preview
+            </Button>
+          </div>
+          {latest && (
+            <div className="rounded-lg border border-border p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Latest build</span>
+                <StatusBadge status={latest.status} />
+              </div>
+              {latest.git_commit_sha && (
+                <div className="mt-1 text-xs text-muted-foreground">
+                  commit <code>{latest.git_commit_sha.slice(0, 8)}</code>
+                  {latest.build_duration_ms ? ` · ${Math.round(latest.build_duration_ms / 100) / 10}s` : ""}
+                </div>
+              )}
+              {latest.error_message && (
+                <div className="mt-1 text-xs text-destructive">{latest.error_message}</div>
+              )}
+            </div>
+          )}
+          <div className="grid gap-2 text-muted-foreground sm:grid-cols-2">
+            <div>Branch: <code className="text-foreground">{app.git_branch}</code></div>
+            <div>Container: <code className="text-foreground">{app.container_name ?? "—"}</code></div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <ConfirmDialog
+        open={confirmDelete} onClose={() => setConfirmDelete(false)}
+        onConfirm={onDelete}
+        title={`Delete preview PR#${app.pr_number}?`}
+        message="Stops the container and removes this preview environment."
       />
     </div>
   );
