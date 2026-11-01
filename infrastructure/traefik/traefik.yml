@@ -1,0 +1,43 @@
+# Traefik static configuration for LocalDeploy
+# Docs: https://doc.traefik.io/traefik/
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: localdeploy-network
+
+entryPoints:
+  http:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: https
+          scheme: https
+          permanent: true
+  https:
+    address: ":443"
+    http:
+      tls:
+        certResolver: letsencrypt
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      # Let's Encrypt production. Swap to the staging CA below while testing
+      # to avoid rate limits: https://acme-staging-v02.api.letsencrypt.org/directory
+      email: "${ACME_EMAIL}"
+      storage: /acme/acme.json
+      httpChallenge:
+        entryPoint: http
+
+api:
+  dashboard: false
+
+log:
+  level: INFO
+
+accessLog:
+  filePath: /dev/stdout
+  bufferingSize: 100

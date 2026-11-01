@@ -1,0 +1,15 @@
+# Traefik dynamic configuration (middlewares shared by all apps)
+http:
+  middlewares:
+    redirect-to-https:
+      redirectScheme:
+        scheme: https
+        permanent: true
+    security-headers:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        frameDeny: true
+        contentTypeNosniff: true
+    compress:
+      compress: {}

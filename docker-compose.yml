@@ -1,0 +1,129 @@
+# =============================================================================
+# LocalDeploy — Production stack
+#
+# Runs the whole platform: Traefik (reverse proxy + ACME/SSL), the API, the
+# dashboard, PostgreSQL and Redis. Application containers deployed through
+# LocalDeploy join the same `localdeploy-network` and are routed by Traefik.
+#
+#   cp .env.example .env   # edit values
+#   docker compose up -d
+# =============================================================================
+name: localdeploy
+
+x-logging: &default-logging
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+networks:
+  localdeploy-network:
+    name: localdeploy-network
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  traefik-acme:
+
+services:
+  traefik:
+    image: traefik:v3.2
+    restart: unless-stopped
+    command:
+      - --configFile=/etc/traefik/traefik.yml
+    ports:
+      - "80:80"
+      - "443:443"
+      # Dashboard/API of traefik itself is NOT exposed publicly by default.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./infrastructure/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./infrastructure/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - traefik-acme:/acme
+    networks: [localdeploy-network]
+    labels:
+      - traefik.enable=true
+      # Route the LocalDeploy dashboard itself
+      - traefik.http.routers.localdeploy.rule=Host(`${LOCALDEPLOY_HOSTNAME:-localdeploy.local}`)
+      - traefik.http.routers.localdeploy.entrypoints=http
+      - traefik.http.services.localdeploy.loadbalancer.server.port=3000
+    <<: *default-logging
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-localdeploy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-CHANGE_ME_STRONG_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-localdeploy}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [localdeploy-network]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-localdeploy}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    <<: *default-logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    networks: [localdeploy-network]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    <<: *default-logging
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: ../../infrastructure/docker/api.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      LOCALDEPLOY_ENVIRONMENT: production
+      LOCALDEPLOY_SECRET_KEY: ${LOCALDEPLOY_SECRET_KEY:?set LOCALDEPLOY_SECRET_KEY in .env}
+      LOCALDEPLOY_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-localdeploy}:${POSTGRES_PASSWORD:-CHANGE_ME_STRONG_PASSWORD}@postgres:5432/${POSTGRES_DB:-localdeploy}
+      LOCALDEPLOY_CORS_ORIGINS: '["http://${LOCALDEPLOY_HOSTNAME:-localdeploy.local}", "https://${LOCALDEPLOY_HOSTNAME:-localdeploy.local}"]'
+      LOCALDEPLOY_PUBLIC_BASE_URL: ${LOCALDEPLOY_PUBLIC_BASE_URL:-http://localhost}
+      LOCALDEPLOY_DOCKER_HOST: unix:///var/run/docker.sock
+      LOCALDEPLOY_WORKSPACE_DIR: /data/workspace
+      LOCALDEPLOY_BACKUPS_DIR: /data/backups
+      LOCALDEPLOY_DEPLOY_NETWORK: localdeploy-network
+    volumes:
+      # Deployment engine needs the Docker socket. This is privileged host-level
+      # access — the API is the ONLY container that gets it, and it is never
+      # exposed to browsers or to deployed applications.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - localdeploy-data:/data
+      # Optional: mount Traefik's acme.json to monitor SSL expiry from the UI
+      # - traefik-acme:/acme:ro
+    networks: [localdeploy-network]
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.localdeploy-api.rule=Host(`${LOCALDEPLOY_HOSTNAME:-localdeploy.local}`) && PathPrefix(`/api`)
+      - traefik.http.routers.localdeploy-api.entrypoints=http
+      - traefik.http.services.localdeploy-api.loadbalancer.server.port=8000
+    <<: *default-logging
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/dashboard.Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://${LOCALDEPLOY_HOSTNAME:-localdeploy.local}}
+    restart: unless-stopped
+    depends_on: [api]
+    networks: [localdeploy-network]
+    <<: *default-logging
+
+volumes:
+  localdeploy-data:
