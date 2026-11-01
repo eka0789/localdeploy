@@ -125,11 +125,14 @@ cd apps/dashboard && npm run build   # type-checked production build
 
 ## Documentation
 
+- **[docs/PANDUAN-LENGKAP.md](docs/PANDUAN-LENGKAP.md)** — 📘 **Panduan lengkap cara pakai (Bahasa Indonesia)**
+- **[docs/MITIGASI-DOWNTIME.md](docs/MITIGASI-DOWNTIME.md)** — 🛡️ Strategi saat PC mati / internet putus (Bahasa Indonesia)
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system design and module map
 - [docs/NETWORKING.md](docs/NETWORKING.md) — public IP vs Cloudflare Tunnel, SSL
 - [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) — configuration reference
 - [docs/WSL2.md](docs/WSL2.md) — Windows development setup
 - [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) — common issues
+- [apps/agent/README.md](apps/agent/README.md) — multi-server agent setup
 
 ## Definition of done (verified)
 
