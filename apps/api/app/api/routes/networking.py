@@ -167,6 +167,60 @@ def tunnel_status(tunnel_id: str, user: User = Depends(get_current_user),
     return tunnel_service.tunnel_status(tunnel)
 
 
+# ------------------------------------------------------------------ cloudflare
+
+@router.get("/cloudflare")
+def cloudflare_status(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from ...services import cloudflare
+
+    token = cloudflare.get_token(db)
+    if not token:
+        return {"connected": False}
+    try:
+        zones = cloudflare.list_zones(token)
+    except cloudflare.CloudflareError as exc:
+        return {"connected": False, "error": str(exc)}
+    account_id = cloudflare.get_account_id(db)
+    tunnels = []
+    try:
+        tunnels = cloudflare.list_account_tunnels(token, account_id)
+    except cloudflare.CloudflareError:
+        pass
+    return {"connected": True, "account_id": account_id, "zones": zones, "tunnels": tunnels}
+
+
+@router.post("/cloudflare", dependencies=[Depends(verify_csrf)])
+def cloudflare_connect(payload: dict, request: Request,
+                       user: User = Depends(require_permission("networking.write")),
+                       db: Session = Depends(get_db)):
+    from ...services import cloudflare
+
+    api_token = str(payload.get("api_token", "")).strip()
+    if len(api_token) < 20:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Paste a valid Cloudflare API token")
+    try:
+        info = cloudflare.verify_token(api_token)
+    except cloudflare.CloudflareError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+    cloudflare.store_credentials(db, api_token, info["account_id"])
+    db.commit()
+    record_audit(db, user, "networking.cloudflare_connect", "settings", None,
+                 {"account": info["account_name"]}, request)
+    return {"ok": True, "account_id": info["account_id"], "account_name": info["account_name"],
+            "zones": cloudflare.list_zones(api_token)}
+
+
+@router.delete("/cloudflare", dependencies=[Depends(verify_csrf)])
+def cloudflare_disconnect(request: Request,
+                          user: User = Depends(require_permission("networking.write")),
+                          db: Session = Depends(get_db)):
+    from ...services import cloudflare
+
+    cloudflare.disconnect(db)
+    record_audit(db, user, "networking.cloudflare_disconnect", "settings", None, {}, request)
+    return {"ok": True}
+
+
 # ------------------------------------------------------------------ helpers
 
 def _detect_public_ip() -> str | None:

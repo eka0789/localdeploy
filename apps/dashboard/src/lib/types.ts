@@ -276,3 +276,53 @@ export interface Role {
   is_system: boolean;
   permission_keys: string[];
 }
+
+/* ---------------- External database connections ---------------- */
+
+export interface DbProvider {
+  key: string;
+  label: string;
+  engine: string;
+  url_scheme: string;
+  fields: string[];
+  default_env: Record<string, string>;
+  docs: string;
+}
+
+export interface DatabaseConnection {
+  id: string;
+  name: string;
+  provider: string;
+  engine: string;
+  host: string | null;
+  port: number | null;
+  database_name: string | null;
+  username: string | null;
+  has_url: boolean;
+  has_password: boolean;
+  extra_fields: Record<string, boolean>;
+  notes: string | null;
+  last_tested_at: string | null;
+  last_test_status: string | null;
+  last_error: string | null;
+  created_at: string;
+}
+
+export interface AppDatabaseLink {
+  link_id: string;
+  connection: DatabaseConnection;
+  env_mapping: Record<string, string>;
+  env_keys: string[];
+}
+
+/* ---------------- Cloudflare ---------------- */
+
+export interface CloudflareZone { id: string; name: string; status: string; }
+export interface CloudflareTunnelInfo { id: string; name: string | null; status: string; connections: number; }
+export interface CloudflareStatus {
+  connected: boolean;
+  error?: string;
+  account_id?: string;
+  zones?: CloudflareZone[];
+  tunnels?: CloudflareTunnelInfo[];
+}

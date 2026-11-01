@@ -6,6 +6,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { Topbar } from "@/components/layout";
+import { ExternalDatabases } from "@/components/external-db";
 import {
   Button, Card, CardContent, CardHeader, CardTitle, ConfirmDialog, Dialog, EmptyState, Input,
   Label, Select, Skeleton, StatusBadge, TD, TBody, TH, THead, TR, Table,
@@ -24,6 +25,7 @@ const ENGINES = [
 
 export default function DatabasesPage() {
   const queryClient = useQueryClient();
+  const [dbTab, setDbTab] = useState<"managed" | "external">("managed");
   const [open, setOpen] = useState(false);
   const [connInfo, setConnInfo] = useState<Record<string, unknown> | null>(null);
   const [backupsFor, setBackupsFor] = useState<DatabaseInstance | null>(null);
@@ -94,69 +96,40 @@ export default function DatabasesPage() {
     <>
       <Topbar
         title="Databases"
-        description="Provisioned datastores on the internal Docker network (never public by default)"
-        actions={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4" /> New database</Button>}
+        description="Managed datastores on the internal network, plus external providers (Supabase, Neon, Turso, …)"
+        actions={
+          dbTab === "managed"
+            ? <Button onClick={() => setOpen(true)}><Plus className="h-4 w-4" /> New database</Button>
+            : undefined
+        }
       />
       <div className="p-8">
-        {isLoading ? (
-          <Skeleton className="h-64" />
-        ) : !databases?.length ? (
-          <EmptyState
-            icon={DatabaseIcon}
-            title="No database instances"
-            description="Provision PostgreSQL, MySQL, MariaDB, Redis or MongoDB with persistent volumes, health checks and backups."
-            action={<Button onClick={() => setOpen(true)}>Provision a database</Button>}
-          />
-        ) : (
-          <Card>
-            <CardContent className="px-0">
-              <Table>
-                <THead>
-                  <TH>Name</TH><TH>Engine</TH><TH>Status</TH><TH>Volume</TH><TH>Created</TH><TH className="w-64">Actions</TH>
-                </THead>
-                <TBody>
-                  {databases.map((db) => (
-                    <TR key={db.id}>
-                      <TD className="font-medium">{db.name}</TD>
-                      <TD>
-                        <Badge variant="info">{db.engine}</Badge>
-                        <div className="mt-1 text-xs text-muted-foreground">{db.image}</div>
-                      </TD>
-                      <TD>
-                        <StatusBadge status={db.status} />
-                        {db.last_error && <div className="max-w-40 truncate text-xs text-destructive">{db.last_error}</div>}
-                      </TD>
-                      <TD><code className="text-xs">{db.volume_name}</code></TD>
-                      <TD className="text-muted-foreground">{relTime(db.created_at)}</TD>
-                      <TD>
-                        <div className="flex gap-1">
-                          <Button variant="ghost" size="icon" title="Start" onClick={() => action.mutate({ id: db.id, act: "start" })}>
-                            <Play className="h-4 w-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon" title="Stop" onClick={() => action.mutate({ id: db.id, act: "stop" })}>
-                            <Square className="h-4 w-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon" title="Restart" onClick={() => action.mutate({ id: db.id, act: "restart" })}>
-                            <RotateCcw className="h-4 w-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon" title="Connection info" onClick={async () => setConnInfo(await api(`/api/databases/${db.id}/connection`))}>
-                            <Info className="h-4 w-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon" title="Backups" onClick={() => setBackupsFor(db)}>
-                            <DatabaseIcon className="h-4 w-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon" title="Delete" onClick={() => setDeleteId(db.id)}>
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
-                        </div>
-                      </TD>
-                    </TR>
-                  ))}
-                </TBody>
-              </Table>
-            </CardContent>
-          </Card>
-        )}
+        <div className="mb-6 flex gap-1 border-b border-border">
+          {(["managed", "external"] as const).map((t) => (
+            <button
+              key={t}
+              onClick={() => setDbTab(t)}
+              className={`border-b-2 px-4 py-2.5 text-sm capitalize transition-colors ${
+                dbTab === t
+                  ? "border-primary font-medium text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {t === "managed" ? "Managed (Docker)" : "External (Supabase, Neon, Turso, …)"}
+            </button>
+          ))}
+        </div>
+
+        {dbTab === "external" && <ExternalDatabases />}
+        {dbTab === "managed" && <ManagedTab
+          databases={databases} isLoading={isLoading}
+          onOpenCreate={() => setOpen(true)}
+          onAction={(id, act) => action.mutate({ id, act })}
+          onDelete={(id) => setDeleteId(id)}
+          onShowConnection={async (id) => setConnInfo(await api(`/api/databases/${id}/connection`))}
+          onShowBackups={(db) => setBackupsFor(db)}
+          onBackup={(id) => backup.mutate(id)}
+        />}
       </div>
 
       {/* create dialog */}
@@ -275,6 +248,79 @@ export default function DatabasesPage() {
         message="The container AND its data volume will be permanently removed."
       />
     </>
+  );
+}
+
+function ManagedTab({ databases, isLoading, onOpenCreate, onAction, onDelete, onShowConnection, onShowBackups, onBackup }: {
+  databases: DatabaseInstance[] | undefined;
+  isLoading: boolean;
+  onOpenCreate: () => void;
+  onAction: (id: string, act: string) => void;
+  onDelete: (id: string) => void;
+  onShowConnection: (id: string) => void;
+  onShowBackups: (db: DatabaseInstance) => void;
+  onBackup: (id: string) => void;
+}) {
+  if (isLoading) return <Skeleton className="h-64" />;
+  if (!databases?.length) {
+    return (
+      <EmptyState
+        icon={DatabaseIcon}
+        title="No managed database instances"
+        description="Provision PostgreSQL, MySQL, MariaDB, Redis or MongoDB with persistent volumes, health checks and backups — or use the External tab for Supabase/Neon/Turso."
+        action={<Button onClick={onOpenCreate}>Provision a database</Button>}
+      />
+    );
+  }
+  return (
+    <Card>
+      <CardContent className="px-0">
+        <Table>
+          <THead>
+            <TH>Name</TH><TH>Engine</TH><TH>Status</TH><TH>Volume</TH><TH>Created</TH><TH className="w-64">Actions</TH>
+          </THead>
+          <TBody>
+            {databases.map((db) => (
+              <TR key={db.id}>
+                <TD className="font-medium">{db.name}</TD>
+                <TD>
+                  <Badge variant="info">{db.engine}</Badge>
+                  <div className="mt-1 text-xs text-muted-foreground">{db.image}</div>
+                </TD>
+                <TD>
+                  <StatusBadge status={db.status} />
+                  {db.last_error && <div className="max-w-40 truncate text-xs text-destructive">{db.last_error}</div>}
+                </TD>
+                <TD><code className="text-xs">{db.volume_name}</code></TD>
+                <TD className="text-muted-foreground">{relTime(db.created_at)}</TD>
+                <TD>
+                  <div className="flex gap-1">
+                    <Button variant="ghost" size="icon" title="Start" onClick={() => onAction(db.id, "start")}>
+                      <Play className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" title="Stop" onClick={() => onAction(db.id, "stop")}>
+                      <Square className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" title="Restart" onClick={() => onAction(db.id, "restart")}>
+                      <RotateCcw className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" title="Connection info" onClick={() => onShowConnection(db.id)}>
+                      <Info className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" title="Backups" onClick={() => onShowBackups(db)}>
+                      <DatabaseIcon className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" title="Delete" onClick={() => onDelete(db.id)}>
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  </div>
+                </TD>
+              </TR>
+            ))}
+          </TBody>
+        </Table>
+      </CardContent>
+    </Card>
   );
 }
 

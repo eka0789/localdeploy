@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeftRight, Cloud, Globe, Play, Plus, Square, Trash2 } from "lucide-react";
+import { ArrowLeftRight, Cloud, Globe, KeyRound, Play, Plug, Plus, Square, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -12,7 +12,7 @@ import {
 } from "@/components/ui";
 import { api } from "@/lib/api";
 import { relTime } from "@/lib/format";
-import type { Tunnel } from "@/lib/types";
+import type { CloudflareStatus, Tunnel } from "@/lib/types";
 
 type NetworkingInfo = {
   mode: string;
@@ -99,6 +99,8 @@ export default function NetworkingPage() {
         actions={<Button onClick={() => setTunnelOpen(true)}><Plus className="h-4 w-4" /> Add tunnel</Button>}
       />
       <div className="space-y-6 p-8">
+        <CloudflareCard />
+
         {/* mode selection */}
         <div className="grid gap-4 lg:grid-cols-2">
           {(["public-ip", "cloudflare-tunnel"] as const).map((mode) => {
@@ -231,5 +233,106 @@ export default function NetworkingPage() {
         message="The cloudflared container will be stopped and the tunnel record removed."
       />
     </>
+  );
+}
+
+
+function CloudflareCard() {
+  const queryClient = useQueryClient();
+  const [token, setToken] = useState("");
+  const [open, setOpen] = useState(false);
+
+  const { data: cf } = useQuery<CloudflareStatus>({
+    queryKey: ["cloudflare"],
+    queryFn: () => api("/api/networking/cloudflare"),
+    refetchInterval: 30_000,
+  });
+
+  const connect = useMutation({
+    mutationFn: () => api("/api/networking/cloudflare", { method: "POST", body: { api_token: token } }),
+    onSuccess: () => {
+      toast.success("Cloudflare connected — domains can now be provisioned one-click");
+      setToken("");
+      setOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["cloudflare"] });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const disconnect = useMutation({
+    mutationFn: () => api("/api/networking/cloudflare", { method: "DELETE" }),
+    onSuccess: () => {
+      toast.success("Cloudflare disconnected");
+      queryClient.invalidateQueries({ queryKey: ["cloudflare"] });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between">
+        <CardTitle className="flex items-center gap-2">
+          <Cloud className="h-5 w-5 text-primary" /> Cloudflare account
+          {cf?.connected && <Badge variant="success">connected</Badge>}
+        </CardTitle>
+        {cf?.connected ? (
+          <Button size="sm" variant="outline" onClick={() => disconnect.mutate()}>Disconnect</Button>
+        ) : (
+          <Button size="sm" onClick={() => setOpen(true)}><Plug className="h-4 w-4" /> Connect</Button>
+        )}
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        {!cf?.connected ? (
+          <p className="text-muted-foreground">
+            Connect a Cloudflare API token to enable one-click domain provisioning: any domain on your
+            account (namadomain.com / .id / .my.id / .biz.id / …) is routed to an application with a single
+            click — tunnel ingress + DNS CNAME created automatically. Required token permissions:{" "}
+            <code>Account:Read</code>, <code>Zone:Read</code>, <code>DNS:Edit</code>,{" "}
+            <code>Cloudflare Tunnel:Edit</code>.
+          </p>
+        ) : (
+          <>
+            <div className="flex flex-wrap gap-1.5">
+              {cf.zones?.map((zone) => (
+                <span key={zone.id} className="rounded-md bg-muted px-2 py-1 text-xs">
+                  {zone.name} <span className="text-muted-foreground">({zone.status})</span>
+                </span>
+              ))}
+            </div>
+            {cf.tunnels && cf.tunnels.length > 0 && (
+              <div className="text-xs text-muted-foreground">
+                Remote tunnels: {cf.tunnels.map((t) => `${t.name} (${t.status})`).join(", ")}
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Now go to <strong>Domains</strong>, pick an application domain and press
+              &ldquo;Connect via tunnel&rdquo; — DNS and routing are provisioned automatically.
+            </p>
+          </>
+        )}
+        {cf?.error && <p className="text-xs text-destructive">{cf.error}</p>}
+      </CardContent>
+
+      <Dialog
+        open={open} onClose={() => setOpen(false)} title="Connect Cloudflare"
+        description="Create an API token in Cloudflare → My Profile → API Tokens."
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+            <Button onClick={() => connect.mutate()} loading={connect.isPending} disabled={token.length < 20}>
+              Verify & connect
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-1.5">
+          <Label>API token</Label>
+          <Input value={token} onChange={(e) => setToken(e.target.value)} placeholder="eyJhbGciOi…" />
+          <p className="text-xs text-muted-foreground">
+            Stored encrypted (Fernet) on this machine. It is only used against api.cloudflare.com.
+          </p>
+        </div>
+      </Dialog>
+    </Card>
   );
 }

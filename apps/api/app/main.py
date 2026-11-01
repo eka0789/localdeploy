@@ -9,8 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .api.deps import record_metrics
-from .api.routes import (applications, auth, backups, databases, deployments, domains, docker,
-                         logs, monitoring, networking, projects, storage, users, webhooks)
+from .api.routes import (applications, auth, backups, databases, db_connections, deployments,
+                         domains, docker, logs, monitoring, networking, projects, storage,
+                         users, webhooks)
 from .api.routes import settings as settings_routes
 from .core.config import settings
 from .core.db import bootstrap
@@ -127,5 +128,6 @@ for router in (
     auth.router, users.router, projects.router, applications.router, deployments.router,
     domains.router, webhooks.router, docker.router, storage.router, databases.router,
     backups.router, monitoring.router, logs.router, networking.router, settings_routes.router,
+    db_connections.router,
 ):
     app.include_router(router)

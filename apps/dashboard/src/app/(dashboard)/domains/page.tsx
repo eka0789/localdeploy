@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy, Globe, Info, Plus, Trash2 } from "lucide-react";
+import { Cloud, Copy, Globe, Info, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -13,7 +13,7 @@ import {
 } from "@/components/ui";
 import { api } from "@/lib/api";
 import { fmtDate, relTime } from "@/lib/format";
-import type { Application, Domain } from "@/lib/types";
+import type { Application, CloudflareStatus, Domain } from "@/lib/types";
 
 type DnsInstructions = {
   hostname: string;
@@ -29,6 +29,8 @@ export default function DomainsPage() {
   const [appId, setAppId] = useState("");
   const [ssl, setSsl] = useState(true);
   const [instructions, setInstructions] = useState<DnsInstructions | null>(null);
+  const [tunnelFor, setTunnelFor] = useState<Domain | null>(null);
+  const [selectedTunnel, setSelectedTunnel] = useState("");
 
   const { data: domains, isLoading } = useQuery<Domain[]>({
     queryKey: ["domains"],
@@ -39,6 +41,11 @@ export default function DomainsPage() {
   const { data: apps } = useQuery<Application[]>({
     queryKey: ["applications"],
     queryFn: () => api("/api/applications"),
+  });
+
+  const { data: cf } = useQuery<CloudflareStatus>({
+    queryKey: ["cloudflare"],
+    queryFn: () => api("/api/networking/cloudflare"),
   });
 
   const add = useMutation({
@@ -75,6 +82,20 @@ export default function DomainsPage() {
   const showInstructions = async (id: string) => {
     setInstructions(await api(`/api/domains/${id}/dns-instructions`));
   };
+
+  const provision = useMutation({
+    mutationFn: ({ id, tunnelId }: { id: string; tunnelId: string }) =>
+      api<{ message: string }>(`/api/domains/${id}/provision-tunnel`, {
+        method: "POST",
+        body: { tunnel_id: tunnelId },
+      }),
+    onSuccess: (data) => {
+      toast.success(data.message);
+      setTunnelFor(null);
+      queryClient.invalidateQueries({ queryKey: ["domains"] });
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   return (
     <>
@@ -118,6 +139,11 @@ export default function DomainsPage() {
                       <TD>
                         <div className="flex gap-1">
                           <Button variant="ghost" size="sm" onClick={() => verify.mutate(domain.id)}>Verify</Button>
+                          {cf?.connected && (
+                            <Button variant="ghost" size="sm" onClick={() => { setTunnelFor(domain); setSelectedTunnel(cf.tunnels?.[0]?.id ?? ""); }}>
+                              <Cloud className="h-4 w-4" /> Tunnel
+                            </Button>
+                          )}
                           <Button variant="ghost" size="icon" onClick={() => showInstructions(domain.id)} aria-label="DNS instructions">
                             <Info className="h-4 w-4" />
                           </Button>
@@ -165,6 +191,43 @@ export default function DomainsPage() {
             <Switch checked={ssl} onChange={setSsl} />
             <Label>Enable HTTPS with Let&apos;s Encrypt</Label>
           </div>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={!!tunnelFor} onClose={() => setTunnelFor(null)}
+        title={`Connect ${tunnelFor?.hostname ?? ""} via Cloudflare Tunnel`}
+        description="Creates the tunnel ingress rule and the proxied DNS CNAME automatically. SSL is issued by Cloudflare."
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setTunnelFor(null)}>Cancel</Button>
+            <Button
+              onClick={() => tunnelFor && provision.mutate({ id: tunnelFor.id, tunnelId: selectedTunnel })}
+              loading={provision.isPending}
+              disabled={!selectedTunnel}
+            >
+              Provision now
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-1.5">
+          <Label>Cloudflare tunnel</Label>
+          <Select value={selectedTunnel} onChange={(e) => setSelectedTunnel(e.target.value)}>
+            <option value="">Select tunnel…</option>
+            {cf?.tunnels?.map((t) => (
+              <option key={t.id} value={t.id}>{t.name} — {t.status} ({t.connections} connections)</option>
+            ))}
+          </Select>
+          {!cf?.tunnels?.length && (
+            <p className="text-xs text-warning">
+              No remote tunnels found. Create one in Zero Trust → Networks → Tunnels, or start a local
+              token tunnel on the Networking page (it appears here once registered on Cloudflare).
+            </p>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Target service will be http://ld-{tunnelFor?.application_slug}:{tunnelFor?.target_port ?? ""}
+          </p>
         </div>
       </Dialog>
 

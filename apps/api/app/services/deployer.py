@@ -344,6 +344,11 @@ def _deploy_single_container(session, app, deployment, image_tag, container_port
 
     env_vars = session.query(EnvironmentVariable).filter_by(application_id=app.id).all()
     env_map = {v.key: decrypt_secret(v.value_encrypted) for v in env_vars}
+    # Inject environment variables from linked external databases (Supabase, Neon, Turso, …)
+    from .db_connections import build_env_for_app
+
+    for key, value in build_env_for_app(session, app.id).items():
+        env_map[key] = value
     if env_map:
         logger.log(f"→ Injecting {len(env_map)} environment variables")
 
@@ -452,6 +457,9 @@ def _deploy_compose(session, app, deployment, workdir, compose_file, logger) -> 
     env = {**os.environ}
     for v in env_vars:
         env[v.key] = decrypt_secret(v.value_encrypted)
+    from .db_connections import build_env_for_app
+
+    env.update(build_env_for_app(session, app.id))
     env["LOCALDEPLOY_NETWORK"] = settings.deploy_network
 
     logger.log(f"→ Running docker compose (project {project})")

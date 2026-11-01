@@ -131,5 +131,30 @@ def dns_instructions(domain_id: uuid.UUID, user: User = Depends(get_current_user
     }
 
 
-def _unused():
-    pass
+@router.post("/{domain_id}/provision-tunnel")
+def provision_domain_tunnel(domain_id: uuid.UUID, payload: dict, request: Request,
+                            user: User = Depends(require_permission("domains.write")),
+                            db: Session = Depends(get_db)):
+    """One-click public exposure: tunnel ingress + DNS CNAME via the Cloudflare API."""
+    from ...services import cloudflare
+
+    domain = db.query(ApplicationDomain).get(domain_id)
+    if domain is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Domain not found")
+    app = domain.application
+    if app is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Domain has no application")
+
+    tunnel_id = str(payload.get("tunnel_id", "")).strip()
+    if not tunnel_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "tunnel_id is required")
+
+    target_port = domain.target_port or app.container_port
+    try:
+        report = cloudflare.provision_domain(db, domain, app.slug, target_port, tunnel_id)
+        db.commit()
+    except cloudflare.CloudflareError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+    record_audit(db, user, "domains.provision_tunnel", "domain", str(domain.id),
+                 {"hostname": domain.hostname, "tunnel": tunnel_id}, request)
+    return report

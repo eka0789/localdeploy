@@ -11,6 +11,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Topbar } from "@/components/layout";
+import { AppDatabaseLinks } from "@/components/external-db";
 import {
   Badge, Button, Card, CardContent, CardHeader, CardTitle, ConfirmDialog, Dialog, EmptyState,
   Input, Label, Select, Skeleton, StatusBadge, Switch, TD, TBody, TH, THead, TR, Table, Textarea,
@@ -20,7 +21,7 @@ import { fmtDate, fmtDuration, relTime } from "@/lib/format";
 import { useLogStream } from "@/lib/use-log-stream";
 import type { Application, ApplicationDetail, Deployment, Domain, EnvVar } from "@/lib/types";
 
-type Tab = "overview" | "deployments" | "domains" | "env" | "logs" | "settings";
+type Tab = "overview" | "deployments" | "domains" | "databases" | "env" | "logs" | "settings";
 
 export default function ApplicationDetailPage() {
   const params = useParams<{ id: string }>();
@@ -73,6 +74,7 @@ export default function ApplicationDetailPage() {
     { id: "overview", label: "Overview", icon: Rocket },
     { id: "deployments", label: "Deployments", icon: RotateCcw },
     { id: "domains", label: "Domains", icon: Globe },
+    { id: "databases", label: "Databases", icon: KeyRound },
     { id: "env", label: "Environment", icon: KeyRound },
     { id: "logs", label: "Logs", icon: Terminal },
     { id: "settings", label: "Settings", icon: Settings2 },
@@ -121,9 +123,10 @@ export default function ApplicationDetailPage() {
           ))}
         </div>
 
-        {tab === "overview" && <OverviewTab app={app} />}
+        {tab === "overview" && <OverviewTab app={app} appId={appId} onChanged={invalidate} />}
         {tab === "deployments" && <DeploymentsTab appId={appId} />}
         {tab === "domains" && <DomainsTab app={app} onChanged={invalidate} />}
+        {tab === "databases" && <AppDatabaseLinks appId={appId} />}
         {tab === "env" && <EnvTab appId={appId} />}
         {tab === "logs" && <LogsTab app={app} />}
         {tab === "settings" && <SettingsTab app={app} onChanged={invalidate} onDelete={() => remove.mutate()} />}
@@ -134,33 +137,73 @@ export default function ApplicationDetailPage() {
 
 /* ------------------------------------------------------------------ tabs */
 
-function OverviewTab({ app }: { app: ApplicationDetail }) {
+function OverviewTab({ app, appId, onChanged }: { app: ApplicationDetail; appId: string; onChanged: () => void }) {
+  const queryClient = useQueryClient();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const upload = useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      return api(`/api/applications/${appId}/upload`, { method: "POST", formData });
+    },
+    onSuccess: () => {
+      toast.success("Source archive uploaded — press Deploy to build it");
+      setUploading(false);
+      queryClient.invalidateQueries({ queryKey: ["application", appId] });
+      onChanged();
+    },
+    onError: (e) => { toast.error(e.message); setUploading(false); },
+  });
+
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <Card>
-        <CardHeader><CardTitle>Source</CardTitle></CardHeader>
-        <CardContent className="space-y-3 text-sm">
-          <Row label="Source type"><Badge variant="info">{app.source_type}</Badge></Row>
-          {app.git_url && <Row label="Repository"><code className="break-all text-xs">{app.git_url}</code></Row>}
-          {app.git_branch && <Row label="Branch">{app.git_branch}</Row>}
-          {app.project_type && <Row label="Detected runtime"><Badge>{app.project_type}</Badge></Row>}
-          {app.docker_image && <Row label="Image"><code className="text-xs">{app.docker_image}</code></Row>}
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader><CardTitle>Runtime</CardTitle></CardHeader>
-        <CardContent className="space-y-3 text-sm">
-          <Row label="Status"><StatusBadge status={app.status} /></Row>
-          <Row label="Container">{app.container_name ?? "—"}</Row>
-          <Row label="Container port">{app.container_port}</Row>
-          <Row label="Health check path">{app.health_check_path ?? "/"}</Row>
-          <Row label="Last deployed">{relTime(app.last_deployed_at)}</Row>
-          <Row label="Domains">{app.domains.length ? app.domains.join(", ") : "none"}</Row>
-          {(app.cpu_limit || app.memory_limit_mb) && (
-            <Row label="Limits">{app.cpu_limit ? `${app.cpu_limit} vCPU` : "—"} · {app.memory_limit_mb ? `${app.memory_limit_mb} MB` : "—"}</Row>
-          )}
-        </CardContent>
-      </Card>
+    <div className="space-y-4">
+      {app.source_type === "upload" && (
+        <Card className="border-primary/40">
+          <CardHeader>
+            <CardTitle>Source archive</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="mb-3 text-sm text-muted-foreground">
+              Upload a .zip / .tar.gz of your project. It replaces the previous archive and is built on the next Deploy.
+            </p>
+            <input
+              ref={fileRef} type="file" accept=".zip,.tar.gz,.tgz,.tar" className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) { setUploading(true); upload.mutate(f); } }}
+            />
+            <Button onClick={() => fileRef.current?.click()} loading={uploading}>
+              <Plus className="h-4 w-4" /> Upload source (.zip / .tar.gz)
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader><CardTitle>Source</CardTitle></CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <Row label="Source type"><Badge variant="info">{app.source_type}</Badge></Row>
+            {app.git_url && <Row label="Repository"><code className="break-all text-xs">{app.git_url}</code></Row>}
+            {app.git_branch && <Row label="Branch">{app.git_branch}</Row>}
+            {app.project_type && <Row label="Detected runtime"><Badge>{app.project_type}</Badge></Row>}
+            {app.docker_image && <Row label="Image"><code className="text-xs">{app.docker_image}</code></Row>}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader><CardTitle>Runtime</CardTitle></CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <Row label="Status"><StatusBadge status={app.status} /></Row>
+            <Row label="Container">{app.container_name ?? "—"}</Row>
+            <Row label="Container port">{app.container_port}</Row>
+            <Row label="Health check path">{app.health_check_path ?? "/"}</Row>
+            <Row label="Last deployed">{relTime(app.last_deployed_at)}</Row>
+            <Row label="Domains">{app.domains.length ? app.domains.join(", ") : "none"}</Row>
+            {(app.cpu_limit || app.memory_limit_mb) && (
+              <Row label="Limits">{app.cpu_limit ? `${app.cpu_limit} vCPU` : "—"} · {app.memory_limit_mb ? `${app.memory_limit_mb} MB` : "—"}</Row>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

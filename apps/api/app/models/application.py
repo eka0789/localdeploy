@@ -97,6 +97,11 @@ class ApplicationDomain(Base, UUIDPk, TimestampMixin):
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # Cloudflare Tunnel auto-provisioning
+    cf_tunnel_id: Mapped[str | None] = mapped_column(String(64))
+    cf_zone_id: Mapped[str | None] = mapped_column(String(64))
+    cf_provisioned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     application: Mapped[Application] = relationship(back_populates="domains")
 
     @property
